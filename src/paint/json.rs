@@ -3832,6 +3832,7 @@ fn render_profile_str(value: RenderProfile) -> &'static str {
     }
 }
 
+/// 양식 종류 `value`를 페인트 JSON의 문자열로 반환한다.
 fn form_type_str(value: FormType) -> &'static str {
     match value {
         FormType::PushButton => "pushButton",
@@ -3839,6 +3840,8 @@ fn form_type_str(value: FormType) -> &'static str {
         FormType::RadioButton => "radioButton",
         FormType::ComboBox => "comboBox",
         FormType::Edit => "edit",
+        FormType::ListBox => "listBox",
+        FormType::ScrollBar => "scrollBar",
     }
 }
 

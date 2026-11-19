@@ -40,7 +40,7 @@ use crate::model::control::{FormObject, FormType};
 use super::utils::{empty_tag, end_tag, start_tag_attrs, text};
 use super::SerializeError;
 
-/// 폼 타입 → HWPX 요소명 (parser 디스패치와 정확히 일치해야 함).
+/// `form_type`에 해당하는 HWPX 요소 이름을 반환한다.
 fn form_tag(form_type: FormType) -> &'static str {
     match form_type {
         FormType::PushButton => "hp:btn",
@@ -48,6 +48,8 @@ fn form_tag(form_type: FormType) -> &'static str {
         FormType::RadioButton => "hp:radioBtn",
         FormType::ComboBox => "hp:comboBox",
         FormType::Edit => "hp:edit",
+        FormType::ListBox => "hp:listBox",
+        FormType::ScrollBar => "hp:scrollBar",
     }
 }
 
@@ -77,7 +79,8 @@ fn combo_items(form: &FormObject) -> Vec<&str> {
     items
 }
 
-/// `<hp:btn>` / `<hp:checkBtn>` / `<hp:radioBtn>` / `<hp:comboBox>` / `<hp:edit>` 를 출력한다.
+/// 양식 `form`의 종류, 속성 및 배치를 XML 리더의 대응 요소로 `w`에 쓴다.
+/// XML 또는 I/O 쓰기 오류를 전달한다.
 pub fn write_form<W: Write>(w: &mut Writer<W>, form: &FormObject) -> Result<(), SerializeError> {
     let tag = form_tag(form.form_type);
     let fore = color_to_hex(form.fore_color);
@@ -96,7 +99,29 @@ pub fn write_form<W: Write>(w: &mut Writer<W>, form: &FormObject) -> Result<(), 
     let mut attrs: Vec<(&str, &str)> = Vec::new();
 
     // 타입별 선두 속성
+    let numeric_value = (form.form_type == FormType::ScrollBar).then(|| form.value.to_string());
     match form.form_type {
+        FormType::ListBox => {
+            attrs.push(("selectedValue", &form.text));
+            attrs.push(("itemHeight", prop(form, "ItemHeight", "-1")));
+            attrs.push(("topIdx", prop(form, "TopIdx", "0")));
+        }
+        FormType::ScrollBar => {
+            attrs.push(("value", numeric_value.as_deref().unwrap_or("0")));
+            for key in [
+                "min",
+                "max",
+                "type",
+                "page",
+                "delay",
+                "largeChange",
+                "smallChange",
+            ] {
+                if let Some(value) = form.properties.get(key) {
+                    attrs.push((key, value));
+                }
+            }
+        }
         FormType::PushButton | FormType::CheckBox | FormType::RadioButton => {
             attrs.push(("caption", &form.caption));
             attrs.push(("value", checked));
@@ -157,7 +182,7 @@ pub fn write_form<W: Write>(w: &mut Writer<W>, form: &FormObject) -> Result<(), 
     )?;
 
     match form.form_type {
-        FormType::ComboBox => {
+        FormType::ComboBox | FormType::ListBox => {
             for (i, item) in combo_items(form).into_iter().enumerate() {
                 let display_key = format!("listItemDisplay{}", i);
                 let display = prop(form, &display_key, "");

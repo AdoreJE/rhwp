@@ -885,7 +885,9 @@ fn register_border_fills_in_shape(
         | ShapeObject::Arc(_)
         | ShapeObject::Polygon(_)
         | ShapeObject::Curve(_)
-        | ShapeObject::TextArt(_) => {
+        | ShapeObject::TextArt(_)
+        | ShapeObject::Video(_)
+        | ShapeObject::Unknown(_) => {
             if let Some(caption) = shape.drawing().and_then(|d| d.caption.as_ref()) {
                 register_border_fills_in_paragraphs(ctx, &caption.paragraphs, depth + 1)?;
             }

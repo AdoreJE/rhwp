@@ -175,6 +175,19 @@ fn dump_shape(shape: &ShapeObject, indent: &str) {
             dump_common(&art.common, indent);
             dump_shape_attr(&art.drawing.shape_attr, indent);
         }
+        ShapeObject::Video(video) => {
+            println!(
+                "{indent}[동영상] file={:?} image={:?}",
+                video.file_id_ref, video.image_id_ref
+            );
+            dump_common(&video.common, indent);
+            dump_shape_attr(&video.drawing.shape_attr, indent);
+        }
+        ShapeObject::Unknown(unknown) => {
+            println!("{indent}[알 수 없는 도형] ctrlID={:?}", unknown.ctrl_id);
+            dump_common(&unknown.common, indent);
+            dump_shape_attr(&unknown.drawing.shape_attr, indent);
+        }
         ShapeObject::Ellipse(ellipse) => {
             println!("{}[타원]", indent);
             dump_common(&ellipse.common, indent);

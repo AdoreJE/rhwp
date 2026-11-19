@@ -1321,6 +1321,8 @@ pub(crate) struct InlineCursor<'a> {
     pub nb_space_as_element: bool,
     /// 리터럴 문자는 고정폭 빈칸 요소와 구분하여 원래 표기로 저장한다.
     pub literal_figure_spaces: &'a [usize],
+    /// 원본 unknownch 문자와 위치.
+    pub unknown_chars: &'a [crate::model::paragraph::UnknownChar],
     /// 개별 문자 출처를 확인한 문단은 문단 단위 신호보다 이 위치를 우선한다.
     pub nb_space_control_indices: Option<&'a [usize]>,
     /// 개체로 방출해 텍스트 커서에서 소비하지 않은 모델 자리표 수.
@@ -1505,6 +1507,9 @@ pub(crate) fn render_hp_t_content(
         .expect("unbounded run XML")
 }
 
+/// 텍스트 조각 `text`를 t 요소로 직렬화하고 `cursor`의 원문 위치를 진행한다.
+/// `tab_extended`는 탭의 원본 속성이고 `storage`는 저장 예산이다.
+/// 완성한 XML을 반환하며 저장 오류를 전달한다.
 fn render_hp_t_content_with_storage<S: crate::storage::Storage>(
     text: &str,
     tab_extended: &[[u16; 7]],
@@ -1524,6 +1529,20 @@ where
         // 제목 차례 표시는 이 문자 **앞**에 놓인다.
         cursor.flush_marks_at_cursor_with_storage(&mut t_xml, &mut buf, storage)?;
         cursor.char_idx += 1;
+        let source_idx = cursor.char_idx - 1 + cursor.nb_space_skipped_source_scalars;
+        if let Ok(index) = cursor
+            .unknown_chars
+            .binary_search_by_key(&source_idx, |mark| mark.char_idx)
+        {
+            flush_buf_with_storage(&mut t_xml, &mut buf, storage)?;
+            let unit = cursor.unknown_chars[index].code_unit;
+            let element = xml_value(
+                storage,
+                format_args!(r#"<hp:unknownch unknownchar="{unit}"/>"#),
+            )?;
+            storage.push_str(&mut t_xml, &element).map_err(xml_error)?;
+            continue;
+        }
         match c {
             '\t' => {
                 flush_buf_with_storage(&mut t_xml, &mut buf, storage)?;
@@ -2410,6 +2429,7 @@ where
         // [#5174] 같은 계약 — 출처가 제어·요소 표기였던 문단만 `<hp:nbSpace/>` 로 되돌린다.
         nb_space_as_element: para.control_mask & (1u32 << 0x001E) != 0,
         literal_figure_spaces: &para.literal_figure_spaces,
+        unknown_chars: &para.unknown_chars,
         nb_space_control_indices: para.nb_space_control_indices.as_deref(),
         ..Default::default()
     };
@@ -4490,6 +4510,20 @@ where
             Some(&art.drawing),
             NO_PTS,
         ),
+        ShapeObject::Video(video) => (
+            "video",
+            &video.common,
+            &video.drawing.caption,
+            Some(&video.drawing),
+            NO_PTS,
+        ),
+        ShapeObject::Unknown(unknown) => (
+            "unknownObj",
+            &unknown.common,
+            &unknown.drawing.caption,
+            Some(&unknown.drawing),
+            NO_PTS,
+        ),
         ShapeObject::Chart(ch) => ("chart", &ch.common, &ch.caption, None, NO_PTS),
         ShapeObject::Ole(o) => {
             // [#3546] hp:chart 출신(chart_id_ref 표식)은 hp:ole 이 아니라 원형
@@ -4521,6 +4555,16 @@ where
         )
     };
     let geom_tail = match shape {
+        ShapeObject::Unknown(unknown) => xml_value(
+            storage,
+            format_args!(
+                "{}{}{}{}",
+                hc("pt0", &unknown.corners[0])?,
+                hc("pt1", &unknown.corners[1])?,
+                hc("pt2", &unknown.corners[2])?,
+                hc("pt3", &unknown.corners[3])?,
+            ),
+        )?,
         ShapeObject::TextArt(art) => xml_value(
             storage,
             format_args!(
@@ -4574,6 +4618,35 @@ where
     // [#4388] `<hp:arc>` 전용 `type` 속성(NORMAL/PIE/CHORD) — OWPML `CArcType` 계약.
     // 종전엔 이 속성 자체가 방출되지 않아 `arc_type` 이 항상 0(NORMAL)으로 저장됐다.
     let extra_attrs = match shape {
+        ShapeObject::Video(video) => xml_value(
+            storage,
+            format_args!(
+                r#" videotype="{}" fileIDRef="{}" imageIDRef="{}" tag="{}""#,
+                xml_escape_attribute_with_storage(&video.video_type, storage)?,
+                xml_escape_attribute_with_storage(
+                    video
+                        .file_bin_data_id
+                        .and_then(|id| ctx.resolve_bin_id(id))
+                        .unwrap_or(&video.file_id_ref),
+                    storage,
+                )?,
+                xml_escape_attribute_with_storage(
+                    video
+                        .image_bin_data_id
+                        .and_then(|id| ctx.resolve_bin_id(id))
+                        .unwrap_or(&video.image_id_ref),
+                    storage,
+                )?,
+                xml_escape_attribute_with_storage(&video.tag, storage)?,
+            ),
+        )?,
+        ShapeObject::Unknown(unknown) => xml_value(
+            storage,
+            format_args!(
+                r#" ctrlID="{}""#,
+                xml_escape_attribute_with_storage(&unknown.ctrl_id, storage)?,
+            ),
+        )?,
         ShapeObject::TextArt(art) => xml_value(
             storage,
             format_args!(

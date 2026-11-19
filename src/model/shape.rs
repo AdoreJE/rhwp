@@ -540,6 +540,10 @@ pub enum ShapeObject {
     Ole(Box<OleShape>),
     /// 글맵시 개체
     TextArt(Box<TextArtShape>),
+    /// HWPX 동영상 개체
+    Video(Box<VideoShape>),
+    /// HWPX에서 알 수 없는 도형으로 저장한 개체
+    Unknown(Box<UnknownShape>),
 }
 
 impl ShapeObject {
@@ -557,6 +561,8 @@ impl ShapeObject {
             ShapeObject::Chart(c) => &c.common,
             ShapeObject::Ole(o) => &o.common,
             ShapeObject::TextArt(s) => &s.common,
+            ShapeObject::Video(s) => &s.common,
+            ShapeObject::Unknown(s) => &s.common,
         }
     }
 
@@ -574,6 +580,8 @@ impl ShapeObject {
             ShapeObject::Chart(c) => &mut c.common,
             ShapeObject::Ole(o) => &mut o.common,
             ShapeObject::TextArt(s) => &mut s.common,
+            ShapeObject::Video(s) => &mut s.common,
+            ShapeObject::Unknown(s) => &mut s.common,
         }
     }
 
@@ -589,6 +597,8 @@ impl ShapeObject {
             ShapeObject::Chart(c) => Some(&c.drawing),
             ShapeObject::Ole(o) => Some(&o.drawing),
             ShapeObject::TextArt(s) => Some(&s.drawing),
+            ShapeObject::Video(s) => Some(&s.drawing),
+            ShapeObject::Unknown(s) => Some(&s.drawing),
             ShapeObject::Group(_) | ShapeObject::Picture(_) => None,
         }
     }
@@ -605,6 +615,8 @@ impl ShapeObject {
             ShapeObject::Chart(c) => Some(&mut c.drawing),
             ShapeObject::Ole(o) => Some(&mut o.drawing),
             ShapeObject::TextArt(s) => Some(&mut s.drawing),
+            ShapeObject::Video(s) => Some(&mut s.drawing),
+            ShapeObject::Unknown(s) => Some(&mut s.drawing),
             ShapeObject::Group(_) | ShapeObject::Picture(_) => None,
         }
     }
@@ -676,6 +688,8 @@ impl ShapeObject {
             ShapeObject::Chart(c) => &c.drawing.shape_attr,
             ShapeObject::Ole(o) => &o.drawing.shape_attr,
             ShapeObject::TextArt(s) => &s.drawing.shape_attr,
+            ShapeObject::Video(s) => &s.drawing.shape_attr,
+            ShapeObject::Unknown(s) => &s.drawing.shape_attr,
         }
     }
 
@@ -789,6 +803,8 @@ impl ShapeObject {
             ShapeObject::Chart(c) => &mut c.drawing.shape_attr,
             ShapeObject::Ole(o) => &mut o.drawing.shape_attr,
             ShapeObject::TextArt(s) => &mut s.drawing.shape_attr,
+            ShapeObject::Video(s) => &mut s.drawing.shape_attr,
+            ShapeObject::Unknown(s) => &mut s.drawing.shape_attr,
         }
     }
 
@@ -806,6 +822,8 @@ impl ShapeObject {
             ShapeObject::Chart(_) => "차트",
             ShapeObject::Ole(_) => "OLE",
             ShapeObject::TextArt(_) => "글맵시",
+            ShapeObject::Video(_) => "동영상",
+            ShapeObject::Unknown(_) => "알 수 없는 도형",
         }
     }
 }
@@ -827,6 +845,32 @@ pub struct TextArtShape {
     pub corners: [Point; 4],
     /// HWP 5.x 글꼴 이름 뒤에 저장된 모양 및 효과 데이터
     pub raw_hwp_tail: Vec<u8>,
+}
+
+/// HWPX 동영상 개체와 매니페스트에서 연결한 리소스.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct VideoShape {
+    pub common: CommonObjAttr,
+    pub drawing: DrawingObjAttr,
+    /// 원본 videotype 속성(Local 또는 Web).
+    pub video_type: String,
+    /// 원본 fileIDRef와 imageIDRef.
+    pub file_id_ref: String,
+    pub image_id_ref: String,
+    /// 원본 tag 속성.
+    pub tag: String,
+    /// 문서 BinData의 동영상·미리보기 ID. 미해결 또는 외부 참조일 수 있다.
+    pub file_bin_data_id: Option<u16>,
+    pub image_bin_data_id: Option<u16>,
+}
+
+/// HWPX unknownObj에 기록된 원본 컨트롤 식별자와 네 꼭짓점.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct UnknownShape {
+    pub common: CommonObjAttr,
+    pub drawing: DrawingObjAttr,
+    pub ctrl_id: String,
+    pub corners: [Point; 4],
 }
 
 /// 직선 개체 (HWPTAG_SHAPE_COMPONENT_LINE)

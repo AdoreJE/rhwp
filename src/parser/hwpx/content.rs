@@ -41,7 +41,8 @@ pub struct PackageInfo {
     pub bin_data_items: Vec<PackageItem>,
 }
 
-/// content.hpf XML을 파싱하여 섹션/BinData 목록을 추출한다.
+/// content.hpf의 `xml`에서 섹션 및 미디어 리소스 목록을 추출한다.
+/// 패키지 정보를 반환하며 XML 파싱 오류를 전달한다.
 pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
     let mut reader = Reader::from_str(xml);
     let mut info = PackageInfo::default();
@@ -127,14 +128,14 @@ pub fn parse_content_hpf(xml: &str) -> Result<PackageInfo, HwpxError> {
     // image 가 누락되어 HWP3 → HWPX 변환본의 image 가 표시되지 않음.
     // 정정: media_type 이 image/* 인 모든 item 도 수집.
     for (id, href, media_type, is_embedded) in &all_items {
-        let is_image = media_type.starts_with("image/");
+        let is_media = media_type.starts_with("image/") || media_type.starts_with("video/");
         let is_bin_data_path = href.starts_with("BinData/") || href.contains("/BinData/");
         // [#1891] 외부 참조(isEmbeded="0")는 media-type 과 무관하게 BinData 항목이다.
         // 원본이 "image/" 같은 퇴화 값을 갖거나 직렬화기가 octet-stream 으로 쓰는 등
         // media-type 만으로는 판별할 수 없고, 누락 시 이후 항목의 인덱스(=bin_data_id)
         // 가 밀려 그림 참조 전체가 어긋난다.
         let is_external_link = !*is_embedded && media_type != "application/xml";
-        if is_image || is_bin_data_path || is_external_link {
+        if is_media || is_bin_data_path || is_external_link {
             info.bin_data_items.push(PackageItem {
                 href: href.clone(),
                 media_type: media_type.clone(),

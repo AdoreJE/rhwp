@@ -57,6 +57,8 @@ fn walk_shape(shape: &ShapeObject, out: &mut Vec<(&'static str, String)>) {
         ShapeObject::Line(x) => ("shape", &x.drawing.caption),
         ShapeObject::Rectangle(x) => ("shape", &x.drawing.caption),
         ShapeObject::TextArt(x) => ("shape", &x.drawing.caption),
+        ShapeObject::Video(x) => ("shape", &x.drawing.caption),
+        ShapeObject::Unknown(x) => ("shape", &x.drawing.caption),
         ShapeObject::Ellipse(x) => ("shape", &x.drawing.caption),
         ShapeObject::Arc(x) => ("shape", &x.drawing.caption),
         ShapeObject::Polygon(x) => ("shape", &x.drawing.caption),

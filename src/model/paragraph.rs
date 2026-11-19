@@ -33,6 +33,14 @@ pub struct CellGrid {
     pub cell: i32,
 }
 
+/// HWPX unknownch의 원시 UTF-16 유닛과 문단 텍스트상의 위치.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct UnknownChar {
+    /// 문단 텍스트에서 Unicode 스칼라로 센 인덱스. UTF-16 위치는 char_offsets에서 조회한다.
+    pub char_idx: usize,
+    pub code_unit: u16,
+}
+
 /// 문단 (HWPTAG_PARA_HEADER + 하위 레코드)
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct Paragraph {
@@ -62,6 +70,9 @@ pub struct Paragraph {
     /// 파일 표기 출처이며 원문 문자·UTF-16 축은 바꾸지 않는다.
     #[serde(skip_serializing)]
     pub literal_figure_spaces: Vec<usize>,
+    /// 원문에 unknownch로 명시된 문자. 대체 문자가 표시돼도 원시 유닛은 여기 보존한다.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unknown_chars: Vec<UnknownChar>,
     /// 원본에서 묶음 빈칸 제어로 저장된 문자의 스칼라 위치. `Some`은 리터럴과
     /// 제어 표기를 각각 확인한 결과이며, `None`은 개별 출처를 알 수 없는 기존 입력이다.
     #[serde(skip_serializing)]
@@ -1602,12 +1613,21 @@ impl Paragraph {
         inserted_at
     }
 
-    /// 삽입 방식과 무관하게 복사한 묶음 빈칸의 원본 제어 슬롯을 함께 옮긴다.
+    /// `source`에서 복사한 문자 출처를 실제 삽입 위치 `inserted_at`에 옮긴다.
     pub(crate) fn inherit_inserted_text_controls(
         &mut self,
         source: &Paragraph,
         inserted_at: usize,
     ) {
+        self.unknown_chars
+            .extend(source.unknown_chars.iter().map(|mark| UnknownChar {
+                char_idx: inserted_at + mark.char_idx,
+                ..*mark
+            }));
+        if !source.unknown_chars.is_empty() {
+            self.unknown_chars
+                .sort_unstable_by_key(|mark| mark.char_idx);
+        }
         if let Some(indices) = &mut self.nb_space_control_indices {
             indices.extend(
                 source
@@ -1630,6 +1650,11 @@ impl Paragraph {
     /// [`insert_text_at`](Self::insert_text_at) 과 같되, `after_inline_control` 이면
     /// `char_offset` 자리에 놓인 개체 **뒤**(다음 글자 앞)에 넣는다 (#7444).
     /// 글자 위치만으로는 개체 앞뒤를 가릴 수 없어 논리 오프셋 입력이 이 값을 넘긴다.
+    /// - `char_offset`: 요청한 문자 위치.
+    /// - `new_text`: 삽입할 텍스트. 빈 문자열이면 위치만 반환한다.
+    /// - `after_inline_control`: 같은 슬롯의 개체 뒤에 삽입할지 여부.
+    ///
+    /// 실제 삽입한 문자 인덱스를 반환한다.
     pub(crate) fn insert_text_at_caret(
         &mut self,
         char_offset: usize,
@@ -1790,6 +1815,11 @@ impl Paragraph {
                 .filter_map(|(i, ch)| (*ch == '\u{2007}').then_some(char_offset + i)),
         );
         self.literal_figure_spaces.sort_unstable();
+        for mark in &mut self.unknown_chars {
+            if mark.char_idx >= char_offset {
+                mark.char_idx += new_chars.len();
+            }
+        }
         let mut nb_spaces = self.materialized_nb_space_controls();
         for index in &mut nb_spaces {
             if *index >= char_offset {
@@ -1908,6 +1938,8 @@ impl Paragraph {
     /// char_offset은 Rust 문자(char) 인덱스이다 (바이트 인덱스가 아님).
     /// 삭제 후 char_offsets, char_shapes, line_segs, char_count가 자동 갱신된다.
     /// 반환값: 실제 삭제된 문자 수.
+    /// `char_offset`부터 최대 `count`개 문자를 지우고 원문 출처 위치를 갱신한다.
+    /// 실제로 지운 문자 개수를 반환한다.
     pub fn delete_text_at(&mut self, char_offset: usize, count: usize) -> usize {
         if count == 0 {
             return 0;
@@ -1947,6 +1979,14 @@ impl Paragraph {
         for position in &mut self.literal_figure_spaces {
             if *position >= del_end {
                 *position -= del_end - char_offset;
+            }
+        }
+
+        self.unknown_chars
+            .retain(|mark| mark.char_idx < char_offset || mark.char_idx >= del_end);
+        for mark in &mut self.unknown_chars {
+            if mark.char_idx >= del_end {
+                mark.char_idx -= del_end - char_offset;
             }
         }
 
@@ -2116,6 +2156,8 @@ impl Paragraph {
     /// 새 문단의 문단 모양·스타일·번호 시작 방식 등은 `self` 에서 상속된다 — Enter
     /// 분할의 시맨틱이다. 병합의 역연산으로 쓰는 호출부는 `apply_meta` 로 사라진
     /// 문단의 원래 값을 되돌려야 한다 (Task #2342).
+    /// `char_offset`에서 문단을 나누고 뒤쪽 문단을 반환한다.
+    /// 원문 출처의 문자 인덱스도 각 문단에 맞춰 옮긴다.
     pub fn split_at(&mut self, char_offset: usize) -> Paragraph {
         self.layout_object_projection = false;
         self.layout_float_band = false;
@@ -2217,6 +2259,17 @@ impl Paragraph {
             .collect();
         self.literal_figure_spaces
             .retain(|&position| position < split_pos);
+
+        let new_unknown_chars = self
+            .unknown_chars
+            .iter()
+            .filter(|mark| mark.char_idx >= split_pos)
+            .map(|mark| UnknownChar {
+                char_idx: mark.char_idx - split_pos,
+                ..*mark
+            })
+            .collect();
+        self.unknown_chars.retain(|mark| mark.char_idx < split_pos);
 
         // 2. char_offsets 분할
         let new_char_offsets: Vec<u32> = self.char_offsets[split_pos..]
@@ -2498,6 +2551,7 @@ impl Paragraph {
             text: new_text,
             char_offsets: new_char_offsets,
             literal_figure_spaces: new_literal_figure_spaces,
+            unknown_chars: new_unknown_chars,
             nb_space_control_indices: Some(new_nb_spaces),
             char_shapes: new_char_shapes,
             line_segs: new_line_segs,
@@ -2562,6 +2616,8 @@ impl Paragraph {
         }
     }
 
+    /// 뒤 문단 `other`의 텍스트, 컨트롤 및 원문 출처를 현재 문단에 붙인다.
+    /// `storage`는 저장 예산이며, 부족하면 오류를 전달한다. 성공하면 합치기 전의 앞 문단 길이를 반환한다.
     pub(crate) fn merge_from_with_storage<S: crate::storage::Storage>(
         &mut self,
         other: &Paragraph,
@@ -2633,6 +2689,14 @@ impl Paragraph {
                 .literal_figure_spaces
                 .iter()
                 .map(|&position| position + self_text_len),
+        )?;
+
+        storage.extend(
+            &mut self.unknown_chars,
+            other.unknown_chars.iter().map(|mark| UnknownChar {
+                char_idx: mark.char_idx + self_text_len,
+                ..*mark
+            }),
         )?;
 
         // 2. char_offsets 결합 (other의 오프셋에 utf16_end 추가)

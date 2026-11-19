@@ -395,6 +395,8 @@ pub(crate) fn shape_caption_for_layout(shape: &ShapeObject) -> Option<Caption> {
         ShapeObject::Line(s) => s.drawing.caption.clone(),
         ShapeObject::Rectangle(s) => s.drawing.caption.clone(),
         ShapeObject::TextArt(s) => s.drawing.caption.clone(),
+        ShapeObject::Video(s) => s.drawing.caption.clone(),
+        ShapeObject::Unknown(s) => s.drawing.caption.clone(),
         ShapeObject::Ellipse(s) => s.drawing.caption.clone(),
         ShapeObject::Arc(s) => s.drawing.caption.clone(),
         ShapeObject::Polygon(s) => s.drawing.caption.clone(),

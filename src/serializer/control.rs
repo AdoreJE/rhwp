@@ -1986,6 +1986,13 @@ fn try_serialize_shape_control<S: crate::storage::Storage>(
             tags::SHAPE_RECT_ID,
             tags::HWPTAG_SHAPE_COMPONENT_RECTANGLE,
         ),
+        ShapeObject::Video(_) | ShapeObject::Unknown(_) => (
+            shape.common(),
+            shape.drawing().expect("그리기 속성이 있는 도형"),
+            &shape.drawing().expect("그리기 속성이 있는 도형").caption,
+            tags::SHAPE_RECT_ID,
+            tags::HWPTAG_SHAPE_COMPONENT_RECTANGLE,
+        ),
         ShapeObject::TextArt(v) => (
             &v.common,
             &v.drawing,
@@ -2161,6 +2168,21 @@ fn write_shape_detail<W: std::io::Write>(
             // hwplib: sr.skip(4) — 4바이트 패딩
             w.write_u32(0)?;
         }
+        ShapeObject::Video(video) => {
+            let width = video.drawing.shape_attr.original_width as i32;
+            let height = video.drawing.shape_attr.original_height as i32;
+            w.write_u8(0)?;
+            for coord in [0, 0, width, 0, width, height, 0, height] {
+                w.write_i32(coord)?;
+            }
+        }
+        ShapeObject::Unknown(unknown) => {
+            w.write_u8(0)?;
+            for corner in &unknown.corners {
+                w.write_i32(corner.x)?;
+                w.write_i32(corner.y)?;
+            }
+        }
         ShapeObject::TextArt(art) => {
             for corner in &art.corners {
                 w.write_i32(corner.x)?;
@@ -2218,7 +2240,9 @@ fn group_container_component_data(
                     tags::SHAPE_LINE_ID
                 }
             }
-            ShapeObject::Rectangle(_) => tags::SHAPE_RECT_ID,
+            ShapeObject::Rectangle(_) | ShapeObject::Video(_) | ShapeObject::Unknown(_) => {
+                tags::SHAPE_RECT_ID
+            }
             ShapeObject::TextArt(_) => tags::SHAPE_TEXTART_ID,
             ShapeObject::Ellipse(_) => tags::SHAPE_ELLIPSE_ID,
             ShapeObject::Arc(_) => tags::SHAPE_ARC_ID,
@@ -2351,6 +2375,24 @@ fn serialize_group_child_records(
                 w.write_i32(rect.x_coords[i]).unwrap();
                 w.write_i32(rect.y_coords[i]).unwrap();
             }
+            records.push(Record {
+                tag_id: tags::HWPTAG_SHAPE_COMPONENT_RECTANGLE,
+                level: type_level,
+                size: 0,
+                data: w.into_bytes(),
+            });
+        }
+        ShapeObject::Video(_) | ShapeObject::Unknown(_) => {
+            let drawing = child.drawing().expect("그리기 속성이 있는 도형");
+            records.push(Record {
+                tag_id: tags::HWPTAG_SHAPE_COMPONENT,
+                level: comp_level,
+                size: 0,
+                data: serialize_drawing_shape_component(tags::SHAPE_RECT_ID, drawing, false),
+            });
+            serialize_text_box_if_present(drawing, type_level, records);
+            let mut w = ByteWriter::new();
+            write_shape_detail(child, &mut w).unwrap();
             records.push(Record {
                 tag_id: tags::HWPTAG_SHAPE_COMPONENT_RECTANGLE,
                 level: type_level,
@@ -3446,6 +3488,8 @@ fn next_form_order() -> u32 {
 ///
 /// 정답지 `samples/form-01.hwp` reverse engineering 결과를 기반으로 작성.
 /// 자세한 구조는 `mydocs/plans/task_m100_852_stage24.md` 참조.
+/// `form`을 레코드 깊이 `level`에서 직렬화해 `records`에 추가한다.
+/// HWPX 전용 폼은 HWP5의 호환 폼 유형으로 내보낸다.
 fn serialize_form_control(form: &FormObject, level: u16, records: &mut Vec<Record>) {
     let order = next_form_order();
 
@@ -3519,9 +3563,9 @@ fn serialize_form_control(form: &FormObject, level: u16, records: &mut Vec<Recor
     let type_id: &[u8; 4] = match form.form_type {
         FormType::PushButton => b"tbp+",
         FormType::CheckBox => b"tbc+",
-        FormType::ComboBox => b"boc+",
+        FormType::ComboBox | FormType::ListBox => b"boc+",
         FormType::RadioButton => b"tbr+",
-        FormType::Edit => b"tde+",
+        FormType::Edit | FormType::ScrollBar => b"tde+",
     };
     let prop_str = build_form_prop_str(form, order);
     let wchars: Vec<u16> = prop_str.encode_utf16().collect();
@@ -3543,14 +3587,13 @@ fn serialize_form_control(form: &FormObject, level: u16, records: &mut Vec<Recor
     });
 }
 
-/// 정답지 fall-back BorderType (FormObject.properties 에 키가 없을 때).
+/// 양식 종류 `ft`의 기본 BorderType 값을 반환한다.
 pub(super) fn default_border_type(ft: FormType) -> i32 {
     match ft {
         FormType::PushButton => 4,
         FormType::CheckBox => 0,
         FormType::RadioButton => 0,
-        FormType::ComboBox => 5,
-        FormType::Edit => 5,
+        FormType::ComboBox | FormType::ListBox | FormType::Edit | FormType::ScrollBar => 5,
     }
 }
 
@@ -3645,6 +3688,7 @@ fn build_char_shape_set_for(form: &FormObject) -> String {
     )
 }
 
+/// `form`에 대응하는 HWP5 타입 집합의 이름과 속성 문자열을 반환한다.
 fn build_type_set(form: &FormObject) -> (&'static str, String) {
     match form.form_type {
         FormType::PushButton => (
@@ -3687,7 +3731,7 @@ fn build_type_set(form: &FormObject) -> (&'static str, String) {
                 ),
             )
         }
-        FormType::ComboBox => {
+        FormType::ComboBox | FormType::ListBox => {
             // HWPX `<hp:listItem value="...">` 의 첫 항목이 정답지의 ComboBox Text.
             // HWPX parser 가 form.properties["listItem0"] 로 보존. form.text 우선,
             // 비어있으면 listItem0 fallback.
@@ -3711,7 +3755,7 @@ fn build_type_set(form: &FormObject) -> (&'static str, String) {
                 ),
             )
         }
-        FormType::Edit => {
+        FormType::Edit | FormType::ScrollBar => {
             let password = form
                 .properties
                 .get("PasswordChar")

@@ -94,6 +94,7 @@ fn visit_bin_data_refs(doc: &mut Document, f: &mut dyn FnMut(&mut u16)) {
         }
     }
 
+    /// `shape`의 리소스 참조를 방문하고 각 참조에 `f`를 호출한다.
     fn visit_shape(shape: &mut ShapeObject, f: &mut dyn FnMut(&mut u16)) {
         match shape {
             // `drawing_mut()` 이 `None` 을 주는 두 변형은 각자 캡션을 갖는다.
@@ -116,6 +117,15 @@ fn visit_bin_data_refs(doc: &mut Document, f: &mut dyn FnMut(&mut u16)) {
                 if let Some(caption) = chart.caption.as_mut() {
                     visit_paragraphs(&mut caption.paragraphs, f);
                 }
+            }
+            ShapeObject::Video(video) => {
+                if let Some(id) = &mut video.file_bin_data_id {
+                    f(id);
+                }
+                if let Some(id) = &mut video.image_bin_data_id {
+                    f(id);
+                }
+                visit_drawing(&mut video.drawing, f);
             }
             ShapeObject::Ole(ole) => {
                 visit_drawing(&mut ole.drawing, f);

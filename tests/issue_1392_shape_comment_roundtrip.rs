@@ -18,6 +18,8 @@ fn collect_descriptions(doc: &rhwp::model::document::Document) -> Vec<(String, S
             ShapeObject::Line(x) => ("line", &x.common.description),
             ShapeObject::Rectangle(x) => ("rect", &x.common.description),
             ShapeObject::TextArt(x) => ("textart", &x.common.description),
+            ShapeObject::Video(x) => ("video", &x.common.description),
+            ShapeObject::Unknown(x) => ("unknownObj", &x.common.description),
             ShapeObject::Ellipse(x) => ("ellipse", &x.common.description),
             ShapeObject::Arc(x) => ("arc", &x.common.description),
             ShapeObject::Polygon(x) => ("polygon", &x.common.description),

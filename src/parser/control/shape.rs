@@ -40,12 +40,11 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
     let mut text_paragraphs = Vec::new();
     let mut is_container = false;
     // Task #195: 차트/OLE 감지
-    let mut chart_data_bytes: Option<Vec<u8>> = None;
+    let mut chart_data_bytes = None;
     let mut ole_tag_data: Option<&[u8]> = None;
 
-    // 레벨 기반 필터링: 첫 번째 레코드(SHAPE_COMPONENT)의 레벨을 기준으로
-    // 자신의 레코드만 처리하고, 중첩 컨트롤의 하위 레코드는 무시
-    let base_level = child_records.first().map(|r| r.level).unwrap_or(0);
+    // 첫 레벨에는 캡션·요소 레코드가 함께 올 수 있다.
+    let base_level = child_records.first().map_or(0, |r| r.level);
     let mut shape_component_parsed = false;
 
     // 그룹 컨테이너 사전 감지
@@ -118,17 +117,32 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
                 shape_tag_data = &record.data;
                 ole_tag_data = Some(&record.data);
             }
-            // Task #195: 차트 데이터 (하위 레코드 트리 전체를 raw로 병합 보존)
-            tags::HWPTAG_CHART_DATA => {
-                let mut buf = record.data.clone();
-                // 이 CHART_DATA 이후의 더 깊은 레벨 하위 태그 전체를 병합 (단순화: 직접 자식만)
-                // 단계 3 범위는 CHART_DATA 본문만으로 라운드트립 충분
-                // (단계 5에서 필요 시 하위 태그 구조화 파싱)
-                let _ = &mut buf; // suppress warning
-                chart_data_bytes = Some(record.data.clone());
+            tags::HWPTAG_CHART_DATA if record.level == base_level => {
+                chart_data_bytes = Some(record.data.as_slice());
             }
             tags::HWPTAG_LIST_HEADER => {}
             _ => {}
+        }
+    }
+
+    // 캡션이나 글상자에 들어 있는 요소를 최상위 차트의 소유자로 보지 않는다.
+    let own_component_idx = child_records.iter().position(|record| {
+        record.level == base_level
+            && matches!(
+                record.tag_id,
+                tags::HWPTAG_SHAPE_COMPONENT | tags::HWPTAG_SHAPE_COMPONENT_CONTAINER
+            )
+    });
+    if let Some(idx) = own_component_idx {
+        let component = &child_records[idx];
+        let own_chart = child_records[idx + 1..]
+            .iter()
+            .take_while(|record| record.level > component.level)
+            .find(|record| {
+                record.level == component.level + 1 && record.tag_id == tags::HWPTAG_CHART_DATA
+            });
+        if let Some(chart) = own_chart {
+            chart_data_bytes = Some(&chart.data);
         }
     }
 
@@ -223,11 +237,11 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
     }
 
     // Task #195: 차트 우선 분기 (CHART_DATA가 있으면 GSO 다른 태그 종류와 무관하게 차트로 분류)
-    if let Some(raw_chart) = chart_data_bytes.take() {
+    if let Some(raw_chart) = chart_data_bytes {
         let mut chart = ChartShape::default();
-        chart.common = common.clone();
+        chart.common = common;
         chart.drawing = drawing;
-        chart.raw_chart_data = raw_chart;
+        chart.raw_chart_data = raw_chart.to_vec();
         chart.caption = chart.drawing.caption.take();
         // 단계 4에서 chart_type/title/series를 raw_chart_data에서 추출
         return Control::Shape(Box::new(ShapeObject::Chart(Box::new(chart))));
@@ -719,36 +733,27 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
         return children;
     }
 
-    // SHAPE_COMPONENT_CONTAINER 이후 또는 구버전 그룹의 첫 SHAPE_COMPONENT 이후
-    let container_idx = child_records
+    // 묶음 요소와 그 아래 컨테이너 표지 중 바깥쪽 요소가 부모다.
+    let Some((parent_idx, parent)) = child_records
         .iter()
-        .position(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT_CONTAINER);
-
-    // 첫 SHAPE_COMPONENT 위치 찾기 (캡션 등이 앞에 올 수 있음)
-    let first_sc_idx = child_records
-        .iter()
-        .position(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT);
-
-    let start = match container_idx {
-        Some(idx) => idx + 1,
-        None => {
-            // 구버전: CONTAINER 태그 없이 첫 SHAPE_COMPONENT가 그룹 자체
-            if let Some(sc_idx) = first_sc_idx {
-                sc_idx + 1 // 첫 SHAPE_COMPONENT(그룹 자체) 건너뛰고 자식부터 시작
-            } else {
-                return children;
-            }
-        }
+        .enumerate()
+        .filter(|(_, record)| {
+            matches!(
+                record.tag_id,
+                tags::HWPTAG_SHAPE_COMPONENT | tags::HWPTAG_SHAPE_COMPONENT_CONTAINER
+            )
+        })
+        .min_by_key(|(_, record)| record.level)
+    else {
+        return children;
     };
+    let start = parent_idx + 1;
 
     let records = &child_records[start..];
 
     // SHAPE_COMPONENT를 기준으로 자식 도형 경계 식별
     // 직접 자식 레벨의 SHAPE_COMPONENT만 경계로 사용 (인라인 컨트롤의 깊은 레벨 제외)
-    let parent_level = first_sc_idx
-        .map(|i| child_records[i].level)
-        .or_else(|| child_records.first().map(|r| r.level))
-        .unwrap_or(0);
+    let parent_level = parent.level;
     let child_level = parent_level + 1;
     let mut comp_indices: Vec<usize> = Vec::new();
     for (i, record) in records.iter().enumerate() {
@@ -764,11 +769,11 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
             records.len()
         };
 
-        let child_slice = &records[comp_start..comp_end];
-        if child_slice.is_empty() {
-            continue;
-        }
-
+        let descendants = records[comp_start + 1..comp_end]
+            .iter()
+            .take_while(|record| record.level > child_level)
+            .count();
+        let child_slice = &records[comp_start..comp_start + 1 + descendants];
         // SHAPE_COMPONENT에서 속성+테두리+채우기+그림자 파싱
         let parsed = parse_shape_component_full(&child_slice[0].data);
         let mut child_drawing = DrawingObjAttr {
@@ -792,8 +797,9 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
         // tb_attr: SHAPE_COMPONENT 인라인 텍스트 속성 (미구현, 항상 None)
         let tb_attr: Option<(i16, i16, i16, i16, u32, u32)> = None;
 
-        // 도형 태그 찾기 (직접 자식 level만 — 중첩 Group 자식 제외)
+        // 도형 태그는 자식 요소 바로 아래 레벨에만 속한다.
         let direct_child_level = child_slice[0].level + 1;
+        let mut chart_data = None;
         let mut shape_tag_id: Option<u16> = None;
         let mut shape_tag_data: &[u8] = &[];
         for record in &child_slice[1..] {
@@ -801,6 +807,7 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
                 continue;
             }
             match record.tag_id {
+                tags::HWPTAG_CHART_DATA => chart_data = Some(record.data.as_slice()),
                 tags::HWPTAG_SHAPE_COMPONENT_LINE
                 | tags::HWPTAG_SHAPE_COMPONENT_RECTANGLE
                 | tags::HWPTAG_SHAPE_COMPONENT_ELLIPSE
@@ -808,10 +815,12 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
                 | tags::HWPTAG_SHAPE_COMPONENT_POLYGON
                 | tags::HWPTAG_SHAPE_COMPONENT_CURVE
                 | tags::HWPTAG_SHAPE_COMPONENT_PICTURE
-                | tags::HWPTAG_SHAPE_COMPONENT_TEXTART => {
+                | tags::HWPTAG_SHAPE_COMPONENT_OLE
+                | tags::HWPTAG_SHAPE_COMPONENT_TEXTART
+                    if shape_tag_id.is_none() =>
+                {
                     shape_tag_id = Some(record.tag_id);
                     shape_tag_data = &record.data;
-                    break;
                 }
                 _ => {}
             }
@@ -879,6 +888,15 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
             }
         }
 
+        if let Some(data) = chart_data {
+            children.push(ShapeObject::Chart(Box::new(ChartShape {
+                drawing: child_drawing,
+                raw_chart_data: data.to_vec(),
+                ..Default::default()
+            })));
+            continue;
+        }
+
         // 중첩 Group 감지: shape_tag_id가 없고 하위 SHAPE_COMPONENT가 있으면 재귀
         let has_nested_shapes = shape_tag_id.is_none()
             && child_slice.len() > 1
@@ -891,7 +909,11 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
         let has_container_tag = child_slice[1..]
             .iter()
             .any(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT_CONTAINER);
-        if (has_container_tag && shape_tag_id != Some(tags::HWPTAG_SHAPE_COMPONENT_TEXTART))
+        if (has_container_tag
+            && !matches!(
+                shape_tag_id,
+                Some(tags::HWPTAG_SHAPE_COMPONENT_TEXTART | tags::HWPTAG_SHAPE_COMPONENT_OLE)
+            ))
             || has_nested_shapes
             || child_drawing.shape_attr.ctrl_id == tags::SHAPE_CONTAINER_ID
         {
@@ -904,6 +926,10 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
 
         // 도형 생성
         let shape = match shape_tag_id {
+            Some(tags::HWPTAG_SHAPE_COMPONENT_OLE) => {
+                let ole = parse_ole_shape(CommonObjAttr::default(), child_drawing, shape_tag_data);
+                ShapeObject::Ole(Box::new(ole))
+            }
             Some(tags::HWPTAG_SHAPE_COMPONENT_TEXTART) => ShapeObject::TextArt(Box::new(
                 parse_text_art(CommonObjAttr::default(), child_drawing, shape_tag_data),
             )),

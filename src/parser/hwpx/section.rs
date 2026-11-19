@@ -729,6 +729,7 @@ fn parse_paragraph_body(
     let mut text_parts: Vec<String> = Vec::new();
     // 각 요소의 조각·스칼라 위치를 실제 모델 문자 위치로 투영할 때 사용한다.
     let mut nb_space_parts: Vec<(usize, usize)> = Vec::new();
+    let mut unknown_chars = Vec::new();
     let mut current_char_shape_id: u32 = 0;
     let mut char_shape_changes: Vec<(u32, u32)> = Vec::new(); // (utf16_pos, char_shape_id)
                                                               // 템플릿 첫 run 의 secPr/colPr 뒤에는 같은 charPrIDRef 의 텍스트 run 이 한 번 더
@@ -808,6 +809,12 @@ fn parse_paragraph_body(
                             para.control_mask |= 1u32 << 0x001F;
                         }
                         let part_base = text_parts.len();
+                        unknown_chars.extend(
+                            content
+                                .unknown_chars
+                                .into_iter()
+                                .map(|(part, byte, unit)| (part_base + part, byte, unit)),
+                        );
                         nb_space_parts.extend(
                             content
                                 .nb_space_parts
@@ -902,7 +909,7 @@ fn parse_paragraph_body(
                         parse_lineseg_array(reader, &mut para)?;
                     }
                     b"rect" | b"ellipse" | b"line" | b"connectLine" | b"arc" | b"polygon"
-                    | b"curve" | b"textart" => {
+                    | b"curve" | b"textart" | b"video" | b"unknownObj" => {
                         // 그리기 객체 파싱
                         let shape = parse_shape_object(local, ce, reader, false)?;
                         push_object_slot_placeholder(&mut text_parts);
@@ -950,27 +957,37 @@ fn parse_paragraph_body(
                         para.controls.push(ctrl);
                     }
                     b"btn" => {
-                        let ctrl = parse_form_object(FormType::PushButton, ce, reader)?;
+                        let ctrl = parse_form_object(FormType::PushButton, ce, reader, false)?;
                         text_parts.push("\u{0002}".to_string());
                         para.controls.push(ctrl);
                     }
                     b"checkBtn" => {
-                        let ctrl = parse_form_object(FormType::CheckBox, ce, reader)?;
+                        let ctrl = parse_form_object(FormType::CheckBox, ce, reader, false)?;
                         text_parts.push("\u{0002}".to_string());
                         para.controls.push(ctrl);
                     }
                     b"radioBtn" => {
-                        let ctrl = parse_form_object(FormType::RadioButton, ce, reader)?;
+                        let ctrl = parse_form_object(FormType::RadioButton, ce, reader, false)?;
                         text_parts.push("\u{0002}".to_string());
                         para.controls.push(ctrl);
                     }
                     b"comboBox" => {
-                        let ctrl = parse_form_object(FormType::ComboBox, ce, reader)?;
+                        let ctrl = parse_form_object(FormType::ComboBox, ce, reader, false)?;
                         text_parts.push("\u{0002}".to_string());
                         para.controls.push(ctrl);
                     }
+                    b"listBox" | b"scrollBar" => {
+                        let form_type = if local == b"listBox" {
+                            FormType::ListBox
+                        } else {
+                            FormType::ScrollBar
+                        };
+                        let ctrl = parse_form_object(form_type, ce, reader, false)?;
+                        push_object_slot_placeholder(&mut text_parts);
+                        para.controls.push(ctrl);
+                    }
                     b"edit" => {
-                        let ctrl = parse_form_object(FormType::Edit, ce, reader)?;
+                        let ctrl = parse_form_object(FormType::Edit, ce, reader, false)?;
                         text_parts.push("\u{0002}".to_string());
                         para.controls.push(ctrl);
                     }
@@ -1006,7 +1023,17 @@ fn parse_paragraph_body(
                         let utf16_pos = calc_utf16_len_from_parts(&text_parts);
                         char_shape_changes.push((utf16_pos, current_char_shape_id));
                     }
-                    b"textart" => {
+                    b"listBox" | b"scrollBar" => {
+                        let form_type = if local == b"listBox" {
+                            FormType::ListBox
+                        } else {
+                            FormType::ScrollBar
+                        };
+                        let ctrl = parse_form_object(form_type, ce, reader, true)?;
+                        push_object_slot_placeholder(&mut text_parts);
+                        para.controls.push(ctrl);
+                    }
+                    b"textart" | b"video" | b"unknownObj" => {
                         let shape = parse_shape_object(local, ce, reader, true)?;
                         push_object_slot_placeholder(&mut text_parts);
                         para.controls.push(shape);
@@ -1128,6 +1155,7 @@ fn parse_paragraph_body(
     let mut visual_text = String::new();
     let mut char_offsets: Vec<u32> = Vec::new();
     let mut nb_space_control_indices = Vec::new();
+    let mut unknown_chars = unknown_chars.into_iter().peekable();
     let mut utf16_pos: u32 = 0;
 
     for (part_index, part) in text_parts.iter().enumerate() {
@@ -1165,7 +1193,18 @@ fn parse_paragraph_body(
                 utf16_pos += 8;
             }
             _ => {
-                for (index, c) in part.chars().enumerate() {
+                for (index, (byte, c)) in part.char_indices().enumerate() {
+                    if let Some(&(_, _, code_unit)) = unknown_chars
+                        .peek()
+                        .filter(|&&(p, b, _)| (p, b) == (part_index, byte))
+                    {
+                        para.unknown_chars
+                            .push(crate::model::paragraph::UnknownChar {
+                                char_idx: char_offsets.len(),
+                                code_unit,
+                            });
+                        unknown_chars.next();
+                    }
                     if nb_space_parts.contains(&(part_index, index)) {
                         nb_space_control_indices.push(char_offsets.len());
                     }
@@ -2204,6 +2243,7 @@ struct ParsedTextContent {
     fixed_space_element: bool,
     literal_figure_spaces: Vec<usize>,
     nb_space_parts: Vec<(usize, usize)>,
+    unknown_chars: Vec<(usize, usize, u16)>,
 }
 
 fn visible_text_part_len(parts: &[String]) -> usize {
@@ -2240,6 +2280,8 @@ fn append_literal_text(
     text.push_str(addition);
 }
 
+/// `reader`에서 t 요소의 문자, 공백 출처 및 알 수 없는 원시 문자를 순서대로 읽는다.
+/// 텍스트 조각과 문자 위치를 반환하며 XML 오류를 전달한다.
 fn read_text_content_with_tabs(reader: &mut Reader<&[u8]>) -> Result<ParsedTextContent, HwpxError> {
     let mut parts: Vec<String> = Vec::new();
     let mut text = String::new();
@@ -2249,6 +2291,7 @@ fn read_text_content_with_tabs(reader: &mut Reader<&[u8]>) -> Result<ParsedTextC
     let mut saw_hyphen_element = false;
     let mut saw_fixed_space_element = false;
     let mut literal_figure_spaces = Vec::new();
+    let mut unknown_chars = Vec::new();
     let mut buf = Vec::new();
 
     loop {
@@ -2274,6 +2317,27 @@ fn read_text_content_with_tabs(reader: &mut Reader<&[u8]>) -> Result<ParsedTextC
                     &mut literal_figure_spaces,
                     &decode_xml_general_ref(r),
                 );
+            }
+            Ok(Event::Start(ref e)) if local_name(e.name().as_ref()) == b"chval" => {
+                let value = read_dutmal_text(reader, b"chval")?;
+                append_literal_text(&mut text, &parts, &mut literal_figure_spaces, &value);
+            }
+            Ok(Event::Start(ref e) | Event::Empty(ref e))
+                if local_name(e.name().as_ref()) == b"unknownch" =>
+            {
+                if let Some(code_unit) = e
+                    .attributes()
+                    .flatten()
+                    .find(|attr| attr.key.as_ref().as_bytes() == b"unknownchar")
+                    .and_then(|attr| attr_str(&attr).parse::<u16>().ok())
+                {
+                    unknown_chars.push((parts.len(), text.len(), code_unit));
+                    text.push(
+                        char::from_u32(u32::from(code_unit))
+                            .filter(|character| !character.is_control() && *character < '\u{FFFE}')
+                            .unwrap_or('\u{FFFD}'),
+                    );
+                }
             }
             Ok(Event::End(ref e)) => {
                 let tn = e.name();
@@ -2377,6 +2441,7 @@ fn read_text_content_with_tabs(reader: &mut Reader<&[u8]>) -> Result<ParsedTextC
         fixed_space_element: saw_fixed_space_element,
         literal_figure_spaces,
         nb_space_parts,
+        unknown_chars,
     })
 }
 
@@ -4847,7 +4912,7 @@ fn parse_shape_object(
                                 .map_err(|e| HwpxError::XmlError(format!("textartPr: {e}")))?;
                         }
                     }
-                    b"pt0" => {
+                    b"pt0" | b"Point0" => {
                         for attr in ce.attributes().flatten() {
                             match attr.key.as_ref().as_bytes() {
                                 b"x" => x_coords[0] = parse_i32(&attr),
@@ -4856,7 +4921,7 @@ fn parse_shape_object(
                             }
                         }
                     }
-                    b"pt1" => {
+                    b"pt1" | b"Point1" => {
                         for attr in ce.attributes().flatten() {
                             match attr.key.as_ref().as_bytes() {
                                 b"x" => x_coords[1] = parse_i32(&attr),
@@ -4865,7 +4930,7 @@ fn parse_shape_object(
                             }
                         }
                     }
-                    b"pt2" => {
+                    b"pt2" | b"Point2" => {
                         for attr in ce.attributes().flatten() {
                             match attr.key.as_ref().as_bytes() {
                                 b"x" => x_coords[2] = parse_i32(&attr),
@@ -4874,7 +4939,7 @@ fn parse_shape_object(
                             }
                         }
                     }
-                    b"pt3" => {
+                    b"pt3" | b"Point3" => {
                         for attr in ce.attributes().flatten() {
                             match attr.key.as_ref().as_bytes() {
                                 b"x" => x_coords[3] = parse_i32(&attr),
@@ -5021,6 +5086,39 @@ fn parse_shape_object(
     };
 
     let shape = match shape_type {
+        b"video" => {
+            let mut video = crate::model::shape::VideoShape {
+                common,
+                drawing,
+                ..Default::default()
+            };
+            for attr in e.attributes().flatten() {
+                match attr.key.as_ref().as_bytes() {
+                    b"videotype" => video.video_type = attr_str(&attr),
+                    b"fileIDRef" => video.file_id_ref = attr_str(&attr),
+                    b"imageIDRef" => video.image_id_ref = attr_str(&attr),
+                    b"tag" => video.tag = attr_str(&attr),
+                    _ => {}
+                }
+            }
+            video.file_bin_data_id = super::resolve_video_bin_ref(&video.file_id_ref);
+            video.image_bin_data_id = super::resolve_video_bin_ref(&video.image_id_ref);
+            ShapeObject::Video(Box::new(video))
+        }
+        b"unknownObj" => ShapeObject::Unknown(Box::new(crate::model::shape::UnknownShape {
+            common,
+            drawing,
+            ctrl_id: e
+                .attributes()
+                .flatten()
+                .find(|attr| attr.key.as_ref().as_bytes() == b"ctrlID")
+                .map(|attr| attr_str(&attr))
+                .unwrap_or_default(),
+            corners: std::array::from_fn(|i| crate::model::Point {
+                x: x_coords[i],
+                y: y_coords[i],
+            }),
+        })),
         b"textart" => ShapeObject::TextArt(Box::new(crate::model::shape::TextArtShape {
             common,
             drawing,
@@ -5225,8 +5323,9 @@ fn parse_container_body(
                         }
                     }
                     b"rect" | b"ellipse" | b"line" | b"connectLine" | b"arc" | b"polygon"
-                    | b"curve" | b"textart"
-                        if !self_closing || local == b"textart" =>
+                    | b"curve" | b"textart" | b"video" | b"unknownObj"
+                        if !self_closing
+                            || matches!(local, b"textart" | b"video" | b"unknownObj") =>
                     {
                         // 자식 그리기 객체
                         let child = parse_shape_object(local, ce, reader, self_closing)?;
@@ -7144,10 +7243,18 @@ fn calc_utf16_len_from_parts(parts: &[String]) -> u32 {
 ///
 /// 요소는 `<hp:run>` 직접 자식으로 위치하며, `<hp:sz>` / `<hp:listItem>` /
 /// `<hp:text>` / `<hp:formCharPr>` 등의 자식 요소를 포함한다.
+///
+/// - `form_type`: 요소에 해당하는 양식 종류.
+/// - `e`: 양식의 시작 요소.
+/// - `reader`: 후속 이벤트를 읽는 XML 리더.
+/// - `empty`: 자기닫힘이면 형제 요소를 읽지 않는다.
+///
+/// 양식 컨트롤을 반환하며 XML 파싱 오류를 전달한다.
 fn parse_form_object(
     form_type: FormType,
     e: &quick_xml::events::BytesStart,
     reader: &mut Reader<&[u8]>,
+    empty: bool,
 ) -> Result<Control, HwpxError> {
     let mut form = FormObject {
         form_type,
@@ -7167,6 +7274,21 @@ fn parse_form_object(
             // [Task #TBD] value 는 UNCHECKED/CHECKED/INDETERMINATE 3상태 열거형
             // (OWPML AbstractButtonObjectType). INDETERMINATE 를 UNCHECKED 로
             // 뭉개면 라운드트립 시 tri-state 체크박스의 중간 상태가 유실된다.
+            b"value" if form_type == FormType::ScrollBar => form.value = parse_i32(&attr),
+            b"itemHeight" | b"topIdx" if form_type == FormType::ListBox => {
+                let key = if attr.key.as_ref().as_bytes() == b"itemHeight" {
+                    "ItemHeight"
+                } else {
+                    "TopIdx"
+                };
+                form.properties.insert(key.to_owned(), attr_str(&attr));
+            }
+            b"min" | b"max" | b"type" | b"page" | b"delay" | b"largeChange" | b"smallChange"
+                if form_type == FormType::ScrollBar =>
+            {
+                form.properties
+                    .insert(attr.key.as_ref().to_owned(), attr_str(&attr));
+            }
             b"value" => {
                 form.value = match attr_str(&attr).as_str() {
                     "CHECKED" => 1,
@@ -7278,42 +7400,20 @@ fn parse_form_object(
     let mut list_items: Vec<(String, String)> = Vec::new();
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref ce)) => {
+        if empty {
+            break;
+        }
+        let event = reader.read_event_into(&mut buf);
+        let self_closing = matches!(&event, Ok(Event::Empty(_)));
+        match event {
+            Ok(Event::Start(ref ce) | Event::Empty(ref ce)) => {
                 let cname = ce.name();
                 let local = local_name(cname.as_ref());
-                match local {
-                    b"text" => {
-                        // <hp:text> 자식 (edit 컨트롤) — 텍스트 내용 읽기
-                        let mut tbuf = Vec::new();
-                        loop {
-                            match reader.read_event_into(&mut tbuf) {
-                                Ok(Event::Text(ref t)) => {
-                                    form.text.push_str(t.as_ref());
-                                }
-                                // 양식 개체(edit 컨트롤) 텍스트의 CDATA 저장 형태.
-                                // #2916 과 같은 결함 클래스 — 없으면 form.text 가 빈다.
-                                Ok(Event::CData(ref cdata)) => {
-                                    form.text.push_str(cdata.as_ref());
-                                }
-                                Ok(Event::GeneralRef(ref r)) => {
-                                    form.text.push_str(&decode_xml_general_ref(r));
-                                }
-                                Ok(Event::End(_)) => break,
-                                Ok(Event::Eof) => break,
-                                _ => {}
-                            }
-                            tbuf.clear();
-                        }
-                    }
-                    _ => {
-                        skip_element(reader, local)?;
-                    }
+                if local == b"text" && !self_closing {
+                    form.text.push_str(&read_dutmal_text(reader, local)?);
+                    buf.clear();
+                    continue;
                 }
-            }
-            Ok(Event::Empty(ref ce)) => {
-                let cname = ce.name();
-                let local = local_name(cname.as_ref());
                 match local {
                     b"sz" => {
                         // <hp:sz width="..." widthRelTo="..." height="..." heightRelTo="..." protect="..."/>
@@ -7473,6 +7573,9 @@ fn parse_form_object(
                         }
                     }
                     _ => {}
+                }
+                if !self_closing {
+                    skip_element(reader, local)?;
                 }
             }
             Ok(Event::End(ref ee)) => {

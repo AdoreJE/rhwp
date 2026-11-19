@@ -623,6 +623,7 @@ fn sweep_paragraphs(base: &str, a: &[Paragraph], b: &[Paragraph], out: &mut Dive
 
 /// 문단 1건 — `..` 없는 철저 구조 분해로 필드 누락을 컴파일 타임에 막는다.
 /// (`Paragraph` 에 필드를 추가하면 여기서 컴파일이 깨진다.)
+/// 경로 `base`의 두 문단 `a`와 `b`를 비교해 차이를 `out`에 추가한다.
 fn sweep_paragraph(base: &str, a: &Paragraph, b: &Paragraph, out: &mut DivergenceCollector) {
     let Paragraph {
         char_count,
@@ -644,6 +645,7 @@ fn sweep_paragraph(base: &str, a: &Paragraph, b: &Paragraph, out: &mut Divergenc
         text,
         char_offsets,
         literal_figure_spaces,
+        unknown_chars,
         nb_space_control_indices,
         char_shapes,
         line_segs,
@@ -690,6 +692,7 @@ fn sweep_paragraph(base: &str, a: &Paragraph, b: &Paragraph, out: &mut Divergenc
     f!(text);
     f!(char_offsets);
     f!(literal_figure_spaces);
+    f!(unknown_chars);
     // 개별 출처를 읽을 수 있는 두 형식만 비교한다. 옛 입력의 None은
     // 제어가 없다는 뜻이 아니라 문자별 출처가 알려지지 않았다는 뜻이다.
     if nb_space_control_indices.is_some() && b.nb_space_control_indices.is_some() {
@@ -1114,6 +1117,8 @@ fn strip_shape(s: &mut ShapeObject) {
         Line(x) => drawing!(x),
         Rectangle(x) => drawing!(x),
         TextArt(x) => drawing!(x),
+        Video(x) => drawing!(x),
+        Unknown(x) => drawing!(x),
         Ellipse(x) => drawing!(x),
         Arc(x) => drawing!(x),
         Polygon(x) => drawing!(x),
@@ -1152,6 +1157,8 @@ fn shape_text_box(s: &ShapeObject) -> Option<&crate::model::shape::TextBox> {
         Line(x) => x.drawing.text_box.as_ref(),
         Rectangle(x) => x.drawing.text_box.as_ref(),
         TextArt(x) => x.drawing.text_box.as_ref(),
+        Video(x) => x.drawing.text_box.as_ref(),
+        Unknown(x) => x.drawing.text_box.as_ref(),
         Ellipse(x) => x.drawing.text_box.as_ref(),
         Arc(x) => x.drawing.text_box.as_ref(),
         Polygon(x) => x.drawing.text_box.as_ref(),
@@ -1169,6 +1176,8 @@ fn shape_caption(s: &ShapeObject) -> &Option<crate::model::shape::Caption> {
         Line(x) => &x.drawing.caption,
         Rectangle(x) => &x.drawing.caption,
         TextArt(x) => &x.drawing.caption,
+        Video(x) => &x.drawing.caption,
+        Unknown(x) => &x.drawing.caption,
         Ellipse(x) => &x.drawing.caption,
         Arc(x) => &x.drawing.caption,
         Polygon(x) => &x.drawing.caption,

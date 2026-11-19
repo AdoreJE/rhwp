@@ -184,7 +184,11 @@ impl DocumentCore {
     }
 
     /// 양식 개체 상세 정보를 반환한다 (properties HashMap 포함).
-    /// ComboBox인 경우 스크립트에서 추출한 항목 목록도 포함.
+    /// 콤보 상자와 목록 상자의 항목도 포함한다.
+    ///
+    /// - `sec`, `para`, `ctrl`: 구역·문단·컨트롤 인덱스.
+    ///
+    /// 개체 정보 JSON을 반환하며, 위치가 잘못됐거나 양식이 아니면 오류를 반환한다.
     pub fn get_form_object_info_native(
         &self,
         sec: usize,
@@ -210,7 +214,7 @@ impl DocumentCore {
                 let props_json = format!("{{{}}}", props.join(","));
 
                 // ComboBox: 스크립트에서 InsertString 항목 추출
-                let items_json = if f.form_type == FormType::ComboBox {
+                let items_json = if matches!(f.form_type, FormType::ComboBox | FormType::ListBox) {
                     let items = f
                         .properties
                         .get("_rhwp_items")
@@ -302,6 +306,7 @@ fn find_form_node_at(
     None
 }
 
+/// 양식 종류 `ft`의 모델 이름을 반환한다.
 fn form_type_to_str(ft: FormType) -> &'static str {
     match ft {
         FormType::PushButton => "PushButton",
@@ -309,6 +314,8 @@ fn form_type_to_str(ft: FormType) -> &'static str {
         FormType::ComboBox => "ComboBox",
         FormType::RadioButton => "RadioButton",
         FormType::Edit => "Edit",
+        FormType::ListBox => "ListBox",
+        FormType::ScrollBar => "ScrollBar",
     }
 }
 

@@ -1618,7 +1618,10 @@ impl LayoutEngine {
                 let node = RenderNode::new(node_id, RenderNodeType::Path(path_node), bbox);
                 parent.children.push(node);
             }
-            ShapeObject::Rectangle(_) | ShapeObject::TextArt(_) => {
+            ShapeObject::Rectangle(_)
+            | ShapeObject::TextArt(_)
+            | ShapeObject::Video(_)
+            | ShapeObject::Unknown(_) => {
                 // 회전된 사각형: 4꼭짓점을 아핀 변환하여 다각형으로 렌더링
                 let ow = sa.original_width as f64;
                 let oh = sa.original_height as f64;
@@ -1968,7 +1971,10 @@ impl LayoutEngine {
         };
 
         match shape {
-            ShapeObject::Rectangle(_) | ShapeObject::TextArt(_) => {
+            ShapeObject::Rectangle(_)
+            | ShapeObject::TextArt(_)
+            | ShapeObject::Video(_)
+            | ShapeObject::Unknown(_) => {
                 // 글맵시의 외곽은 사각형 경로로 표시한다.
                 // 글상자의 텍스트·채우기와 선의 가시성은 별개다.
                 // 그룹 자식도 원본의 명시된 SOLID/NONE을 그대로 소비한다.

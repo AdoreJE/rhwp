@@ -887,6 +887,8 @@ fn shape_caption(shape: &ShapeObject) -> Option<&crate::model::shape::Caption> {
         ShapeObject::Line(s) => s.drawing.caption.as_ref(),
         ShapeObject::Rectangle(s) => s.drawing.caption.as_ref(),
         ShapeObject::TextArt(s) => s.drawing.caption.as_ref(),
+        ShapeObject::Video(s) => s.drawing.caption.as_ref(),
+        ShapeObject::Unknown(s) => s.drawing.caption.as_ref(),
         ShapeObject::Ellipse(s) => s.drawing.caption.as_ref(),
         ShapeObject::Arc(s) => s.drawing.caption.as_ref(),
         ShapeObject::Polygon(s) => s.drawing.caption.as_ref(),
