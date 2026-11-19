@@ -964,22 +964,11 @@ fn remap_bin_ref(id: u16, remap: &[u16]) -> u16 {
 /// 스트림 압축 여부를 결정한다. Stage30 probe의 공통 기준선도 압축 플래그를 켠 상태였으므로,
 /// HWPX -> HWP 저장 adapter는 HWP5 compressed 헤더를 명시적으로 materialize해야 한다.
 /// 개체 요소 속성에 대한 가변 접근 — 도형 종류마다 보관 위치가 달라 한 곳에 모은다.
+/// 도형 `obj`의 개체 요소 속성을 가변 참조로 반환한다.
 fn shape_attr_mut(
     obj: &mut crate::model::shape::ShapeObject,
 ) -> Option<&mut crate::model::shape::ShapeComponentAttr> {
-    use crate::model::shape::ShapeObject as S;
-    Some(match obj {
-        S::Line(s) => &mut s.drawing.shape_attr,
-        S::Rectangle(s) => &mut s.drawing.shape_attr,
-        S::Ellipse(s) => &mut s.drawing.shape_attr,
-        S::Arc(s) => &mut s.drawing.shape_attr,
-        S::Polygon(s) => &mut s.drawing.shape_attr,
-        S::Curve(s) => &mut s.drawing.shape_attr,
-        S::Group(g) => &mut g.shape_attr,
-        S::Picture(p) => &mut p.shape_attr,
-        S::Chart(c) => &mut c.drawing.shape_attr,
-        S::Ole(o) => &mut o.drawing.shape_attr,
-    })
+    Some(obj.shape_attr_mut())
 }
 
 /// [#3676] 그림 개체의 사각형 4점과 자르기 정보가 비어 있으면 크기에서 채운다.

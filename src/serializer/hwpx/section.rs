@@ -45,7 +45,8 @@ use super::field::{
     write_bookmark, write_field_begin, write_field_end, write_field_end_full, write_hyperlink_begin,
 };
 use super::utils::{
-    xml_error, xml_escape, xml_escape_with_storage, xml_insert, xml_replacen, xml_value,
+    xml_error, xml_escape, xml_escape_attribute_with_storage, xml_escape_with_storage, xml_insert,
+    xml_replacen, xml_value,
 };
 use super::SerializeError;
 use super::{picture, table};
@@ -4327,6 +4328,13 @@ fn render_shape(shape: &ShapeObject, ctx: &mut SerializeContext) -> String {
     render_shape_with_storage(shape, ctx, &crate::storage::Unbounded).expect("unbounded object XML")
 }
 
+/// 도형과 그룹 자식을 HWPX XML로 직렬화한다.
+///
+/// - `shape`: 내보낼 도형.
+/// - `ctx`: 리소스와 문단 직렬화 문맥.
+/// - `storage`: 직렬화 작업의 저장 예산.
+///
+/// 도형 XML을 반환한다. 저장 예산 오류는 전달하고 일부 하위 XML 오류는 기록한다.
 fn render_shape_with_storage<S: crate::storage::Storage>(
     shape: &ShapeObject,
     ctx: &mut SerializeContext,
@@ -4475,6 +4483,13 @@ where
                 },
             );
         }
+        ShapeObject::TextArt(art) => (
+            "textart",
+            &art.common,
+            &art.drawing.caption,
+            Some(&art.drawing),
+            NO_PTS,
+        ),
         ShapeObject::Chart(ch) => ("chart", &ch.common, &ch.caption, None, NO_PTS),
         ShapeObject::Ole(o) => {
             // [#3546] hp:chart 출신(chart_id_ref 표식)은 hp:ole 이 아니라 원형
@@ -4506,6 +4521,26 @@ where
         )
     };
     let geom_tail = match shape {
+        ShapeObject::TextArt(art) => xml_value(
+            storage,
+            format_args!(
+                concat!(
+                    "{}{}{}{}",
+                    r#"<hp:textartPr fontName="{}" textShape="{}">"#,
+                    r##"<hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/>"##,
+                    "</hp:textartPr>",
+                ),
+                hc("pt0", &art.corners[0])?,
+                hc("pt1", &art.corners[1])?,
+                hc("pt2", &art.corners[2])?,
+                hc("pt3", &art.corners[3])?,
+                xml_escape_attribute_with_storage(&art.font_name, storage)?,
+                xml_escape_attribute_with_storage(
+                    art.text_shape.as_deref().unwrap_or("RECTANGLE"),
+                    storage
+                )?,
+            ),
+        )?,
         ShapeObject::Ellipse(e) => xml_value(
             storage,
             format_args!(
@@ -4539,6 +4574,13 @@ where
     // [#4388] `<hp:arc>` 전용 `type` 속성(NORMAL/PIE/CHORD) — OWPML `CArcType` 계약.
     // 종전엔 이 속성 자체가 방출되지 않아 `arc_type` 이 항상 0(NORMAL)으로 저장됐다.
     let extra_attrs = match shape {
+        ShapeObject::TextArt(art) => xml_value(
+            storage,
+            format_args!(
+                r#" text="{}""#,
+                xml_escape_attribute_with_storage(&art.text, storage)?
+            ),
+        )?,
         ShapeObject::Arc(a) => xml_value(
             storage,
             format_args!(r#" type="{}""#, arc_type_hwpx_str(a.arc_type)),

@@ -853,6 +853,7 @@ fn normalize_paragraph_like_hwpx_export(para: &mut crate::model::paragraph::Para
     }
 }
 
+/// 도형 `s`의 글상자를 가변 참조로 반환한다. 없으면 `None`을 반환한다.
 fn shape_text_box_mut(
     s: &mut crate::model::shape::ShapeObject,
 ) -> Option<&mut crate::model::shape::TextBox> {
@@ -860,6 +861,7 @@ fn shape_text_box_mut(
     match s {
         Line(x) => x.drawing.text_box.as_mut(),
         Rectangle(x) => x.drawing.text_box.as_mut(),
+        TextArt(x) => x.drawing.text_box.as_mut(),
         Ellipse(x) => x.drawing.text_box.as_mut(),
         Arc(x) => x.drawing.text_box.as_mut(),
         Polygon(x) => x.drawing.text_box.as_mut(),
@@ -870,6 +872,7 @@ fn shape_text_box_mut(
     }
 }
 
+/// 도형 `s`의 캡션을 가변 참조로 반환한다. 없으면 `None`을 반환한다.
 fn shape_caption_mut(
     s: &mut crate::model::shape::ShapeObject,
 ) -> Option<&mut crate::model::shape::Caption> {
@@ -877,6 +880,7 @@ fn shape_caption_mut(
     match s {
         Line(x) => x.drawing.caption.as_mut(),
         Rectangle(x) => x.drawing.caption.as_mut(),
+        TextArt(x) => x.drawing.caption.as_mut(),
         Ellipse(x) => x.drawing.caption.as_mut(),
         Arc(x) => x.drawing.caption.as_mut(),
         Polygon(x) => x.drawing.caption.as_mut(),
@@ -1771,11 +1775,13 @@ fn diff_shape_char_shapes(
 }
 
 /// ShapeObject 에서 `CommonObjAttr` 참조를 꺼낸다 (#1392 — description 비교용).
+/// 도형 `s`의 공통 배치 속성을 반환한다.
 fn shape_common(s: &crate::model::shape::ShapeObject) -> &crate::model::shape::CommonObjAttr {
     use crate::model::shape::ShapeObject::*;
     match s {
         Line(x) => &x.common,
         Rectangle(x) => &x.common,
+        TextArt(x) => &x.common,
         Ellipse(x) => &x.common,
         Arc(x) => &x.common,
         Polygon(x) => &x.common,
@@ -1788,11 +1794,13 @@ fn shape_common(s: &crate::model::shape::ShapeObject) -> &crate::model::shape::C
 }
 
 /// ShapeObject 에서 글상자(TextBox) 참조를 꺼낸다 (없으면 None).
+/// `s`는 왕복 비교 대상 도형이다.
 fn shape_text_box(s: &crate::model::shape::ShapeObject) -> Option<&crate::model::shape::TextBox> {
     use crate::model::shape::ShapeObject::*;
     match s {
         Line(x) => x.drawing.text_box.as_ref(),
         Rectangle(x) => x.drawing.text_box.as_ref(),
+        TextArt(x) => x.drawing.text_box.as_ref(),
         Ellipse(x) => x.drawing.text_box.as_ref(),
         Arc(x) => x.drawing.text_box.as_ref(),
         Polygon(x) => x.drawing.text_box.as_ref(),
@@ -1805,11 +1813,13 @@ fn shape_text_box(s: &crate::model::shape::ShapeObject) -> Option<&crate::model:
 
 /// ShapeObject 에서 캡션 필드 참조를 꺼낸다 (#1403).
 /// 그리기 도형은 `drawing.caption`, 묶음/그림/차트/OLE 는 각자의 caption 필드.
+/// `s`의 캡션 슬롯을 반환한다.
 fn shape_caption(s: &crate::model::shape::ShapeObject) -> &Option<crate::model::shape::Caption> {
     use crate::model::shape::ShapeObject::*;
     match s {
         Line(x) => &x.drawing.caption,
         Rectangle(x) => &x.drawing.caption,
+        TextArt(x) => &x.drawing.caption,
         Ellipse(x) => &x.drawing.caption,
         Arc(x) => &x.drawing.caption,
         Polygon(x) => &x.drawing.caption,

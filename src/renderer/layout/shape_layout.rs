@@ -1503,6 +1503,13 @@ impl LayoutEngine {
     /// coordinate system. Apply only that top-level group anchor; nested group
     /// bboxes are structural and must not be applied as another translation.
     /// sa: 자식의 ShapeComponentAttr (아핀 행렬 포함)
+    ///
+    /// - `tree`, `parent`: 쪽 배치 상태와 렌더 노드를 추가할 부모.
+    /// - `child`, `sa`: 묶음 자식과 원본 행렬.
+    /// - `group_origin_x`, `group_origin_y`: 최상위 묶음의 기준 원점.
+    /// - `section_index`, `para_index`, `control_index`: 원본 개체의 소속.
+    /// - `styles`, `bin_data_content`: 문서 스타일과 그림 리소스.
+    /// - `parent_cell_path`: 바깥쪽 셀의 소유 경로.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_group_child_affine(
         &self,
@@ -1611,12 +1618,13 @@ impl LayoutEngine {
                 let node = RenderNode::new(node_id, RenderNodeType::Path(path_node), bbox);
                 parent.children.push(node);
             }
-            ShapeObject::Rectangle(rect) => {
+            ShapeObject::Rectangle(_) | ShapeObject::TextArt(_) => {
                 // 회전된 사각형: 4꼭짓점을 아핀 변환하여 다각형으로 렌더링
                 let ow = sa.original_width as f64;
                 let oh = sa.original_height as f64;
                 let corners = [(0.0, 0.0), (ow, 0.0), (ow, oh), (0.0, oh)];
-                let (style, gradient) = drawing_to_shape_style(&rect.drawing, self.dpi);
+                let drawing = child.drawing().expect("그리기 속성이 있는 도형");
+                let (style, gradient) = drawing_to_shape_style(drawing, self.dpi);
                 let mut commands = Vec::new();
                 let mut min_x = f64::MAX;
                 let mut min_y = f64::MAX;
@@ -1862,6 +1870,21 @@ impl LayoutEngine {
         )
     }
 
+    /// 도형을 현재 배치 원점에서 렌더 노드로 추가한다.
+    ///
+    /// - `tree`: 노드 ID와 쪽 배치 상태.
+    /// - `parent`: 생성한 노드를 받을 부모.
+    /// - `shape`: 표시할 도형.
+    /// - `base_x`, `base_y`: 도형의 기준 원점.
+    /// - `w`, `h`: 표시 너비와 높이.
+    /// - `section_index`, `para_index`, `control_index`: 원본 개체의 소속.
+    /// - `styles`: 해석한 문서 스타일.
+    /// - `bin_data_content`: 그림과 채우기 리소스.
+    /// - `overflow_map`: 순서대로 이어질 글상자 내용.
+    /// - `parent_cell_path`: 바깥쪽 셀의 소유 경로.
+    /// - `table_cell_ref`: 표 안의 셀·문단·컨트롤 인덱스.
+    /// - `matrix_positioned`: 원본 행렬을 배치에 이미 적용했는지 여부.
+    /// - `inherited_group_origin`: 상위 묶음의 원점.
     #[allow(clippy::too_many_arguments)]
     fn layout_shape_object_with_group_origin(
         &self,
@@ -1945,16 +1968,19 @@ impl LayoutEngine {
         };
 
         match shape {
-            ShapeObject::Rectangle(rect) => {
+            ShapeObject::Rectangle(_) | ShapeObject::TextArt(_) => {
+                // 글맵시의 외곽은 사각형 경로로 표시한다.
                 // 글상자의 텍스트·채우기와 선의 가시성은 별개다.
                 // 그룹 자식도 원본의 명시된 SOLID/NONE을 그대로 소비한다.
-                let (style, gradient) = drawing_to_shape_style(&rect.drawing, self.dpi);
-                let round_px = if rect.round_rate > 0 {
-                    // 한컴 곡률 50%는 반원이다. 짧은 변의 절반이 반지름이며,
-                    // 백분율을 적용한 뒤 다시 2로 나누면 50%도 둥근 모서리에 그친다.
-                    (rect.round_rate as f64 / 100.0) * render_w.min(render_h)
-                } else {
-                    0.0
+                let drawing = shape.drawing().expect("그리기 속성이 있는 도형");
+                let (style, gradient) = drawing_to_shape_style(drawing, self.dpi);
+                let round_px = match shape {
+                    ShapeObject::Rectangle(rect) if rect.round_rate > 0 => {
+                        // 한컴 곡률 50%는 반원이다. 짧은 변의 절반이 반지름이며,
+                        // 백분율을 적용한 뒤 다시 2로 나누면 50%도 둥근 모서리에 그친다.
+                        (rect.round_rate as f64 / 100.0) * render_w.min(render_h)
+                    }
+                    _ => 0.0,
                 };
                 let node_id = tree.next_id();
                 let mut node = RenderNode::new(
@@ -1967,9 +1993,9 @@ impl LayoutEngine {
                         cell_index,
                         cell_para_index,
                         outer_table_control_index,
-                        drawing_border_width_hu: (rect.drawing.border_line.outline_style == 0
-                            && rect.drawing.fill.image.is_none())
-                        .then_some(rect.drawing.border_line.width),
+                        drawing_border_width_hu: (drawing.border_line.outline_style == 0
+                            && drawing.fill.image.is_none())
+                        .then_some(drawing.border_line.width),
                         ..RectangleNode::new(round_px, style, gradient)
                     }),
                     BoundingBox::new(render_x, render_y, render_w, render_h),
@@ -1978,19 +2004,19 @@ impl LayoutEngine {
                 self.add_image_fill_node(
                     tree,
                     &mut node,
-                    &rect.drawing,
+                    drawing,
                     render_x,
                     render_y,
                     render_w,
                     render_h,
                     bin_data_content,
                 );
-                compound_rectangle::append_border(tree, &mut node, &rect.drawing);
+                compound_rectangle::append_border(tree, &mut node, drawing);
                 // TextBox가 있으면 자식으로 텍스트 레이아웃
                 self.layout_textbox_content(
                     tree,
                     &mut node,
-                    &rect.drawing,
+                    drawing,
                     render_x,
                     render_y,
                     render_w,
@@ -2006,7 +2032,9 @@ impl LayoutEngine {
                     matrix_positioned,
                     textbox_vpos_origin_hu(shape.common(), matrix_positioned),
                 );
-                node.set_rectangle_control_kind(rect.control_kind());
+                if let ShapeObject::Rectangle(rect) = shape {
+                    node.set_rectangle_control_kind(rect.control_kind());
+                }
                 parent.children.push(node);
             }
             ShapeObject::Line(line) => {

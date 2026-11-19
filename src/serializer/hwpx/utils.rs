@@ -208,6 +208,25 @@ fn write_escaped<W: Write>(
     w.write_bytes(&s.as_bytes()[start..])
 }
 
+/// XML 속성에서 마크업 문자와 탭, 개행을 이스케이프한다.
+///
+/// - `s`: 속성의 원래 문자열.
+/// - `storage`: 직렬화 작업의 저장 예산.
+///
+/// 이스케이프한 문자열을 반환하며 저장 오류를 전달한다.
+pub(super) fn xml_escape_attribute_with_storage<S: crate::storage::Storage>(
+    s: &str,
+    storage: &S,
+) -> Result<String, SerializeError>
+where
+    S::Error: std::fmt::Display,
+{
+    let bytes = storage
+        .binary(&XmlPayload::Text(s, Escape::Attribute))
+        .map_err(xml_error)?;
+    Ok(String::from_utf8(bytes).expect("XML 인코더는 UTF-8을 유지한다"))
+}
+
 /// Literal replacement shares the same borrowed spans with the fallible display sink.
 /// `match_indices` also preserves the standard empty-pattern UTF-8 boundary behavior.
 pub(super) fn xml_replacen<S: crate::storage::Storage>(

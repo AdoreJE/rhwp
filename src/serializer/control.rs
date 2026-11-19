@@ -1951,6 +1951,15 @@ fn serialize_shape_control(
     }
 }
 
+/// 최상위 도형의 CTRL_HEADER와 자식 레코드를 직렬화한다.
+///
+/// - `shape`: 저장할 도형.
+/// - `level`: CTRL_HEADER의 레코드 깊이.
+/// - `ctrl_data_record`: 보존할 선택적 CTRL_DATA 본문.
+/// - `records`: 결과를 추가할 레코드 목록.
+/// - `storage`: 직렬화 작업의 저장 예산.
+///
+/// 저장 예산 또는 레코드 생성 오류를 전달한다.
 fn try_serialize_shape_control<S: crate::storage::Storage>(
     shape: &ShapeObject,
     level: u16,
@@ -1976,6 +1985,13 @@ fn try_serialize_shape_control<S: crate::storage::Storage>(
             &v.drawing.caption,
             tags::SHAPE_RECT_ID,
             tags::HWPTAG_SHAPE_COMPONENT_RECTANGLE,
+        ),
+        ShapeObject::TextArt(v) => (
+            &v.common,
+            &v.drawing,
+            &v.drawing.caption,
+            tags::SHAPE_TEXTART_ID,
+            tags::HWPTAG_SHAPE_COMPONENT_TEXTART,
         ),
         ShapeObject::Ellipse(v) => (
             &v.common,
@@ -2051,6 +2067,8 @@ fn try_serialize_shape_control<S: crate::storage::Storage>(
     )
 }
 
+/// 도형 `shape`의 세부 페이로드를 `w`에 쓴다.
+/// 기본 페이로드를 지원하지 않는 도형 또는 쓰기 실패는 I/O 오류를 반환한다.
 fn write_shape_detail<W: std::io::Write>(
     shape: &ShapeObject,
     w: &mut ByteWriter<W>,
@@ -2143,6 +2161,23 @@ fn write_shape_detail<W: std::io::Write>(
             // hwplib: sr.skip(4) — 4바이트 패딩
             w.write_u32(0)?;
         }
+        ShapeObject::TextArt(art) => {
+            for corner in &art.corners {
+                w.write_i32(corner.x)?;
+                w.write_i32(corner.y)?;
+            }
+            w.write_hwp_string(&art.text)?;
+            w.write_hwp_string(&art.font_name)?;
+            if art.raw_hwp_tail.is_empty() {
+                // HWPX에서 온 글맵시에는 HWP 기본 속성을 쓴다.
+                w.write_hwp_string("")?;
+                for value in [1, 42, 120, 100, 0, 0, 0, 0, 0, 0] {
+                    w.write_u32(value)?;
+                }
+            } else {
+                w.write_bytes(&art.raw_hwp_tail)?;
+            }
+        }
         ShapeObject::Chart(chart) => {
             w.write_bytes(&chart.raw_chart_data)?;
         }
@@ -2157,6 +2192,10 @@ fn write_shape_detail<W: std::io::Write>(
 
 /// 그룹('$con') SHAPE_COMPONENT 데이터: 공통 component + 자식 수(u16) +
 /// 자식 ctrl_id 목록(u32[]) + instance_id (한컴 호환). 최상위/중첩 그룹 공용.
+/// - `group`: 직렬화할 그룹과 자식 목록.
+/// - `top_level`: 최상위 개체이면 컨트롤 ID를 두 번 기록한다.
+///
+/// 그룹 SHAPE_COMPONENT의 데이터 바이트를 반환한다.
 fn group_container_component_data(
     group: &crate::model::shape::GroupShape,
     top_level: bool,
@@ -2180,6 +2219,7 @@ fn group_container_component_data(
                 }
             }
             ShapeObject::Rectangle(_) => tags::SHAPE_RECT_ID,
+            ShapeObject::TextArt(_) => tags::SHAPE_TEXTART_ID,
             ShapeObject::Ellipse(_) => tags::SHAPE_ELLIPSE_ID,
             ShapeObject::Arc(_) => tags::SHAPE_ARC_ID,
             ShapeObject::Polygon(_) => tags::SHAPE_POLYGON_ID,
@@ -2233,6 +2273,12 @@ fn serialize_group_child(
     }
 }
 
+/// 그룹 자식의 요소 및 상세 레코드를 직렬화한다.
+///
+/// - `child`: 저장할 그룹 자식.
+/// - `comp_level`: SHAPE_COMPONENT 레코드 깊이.
+/// - `type_level`: 도형별 상세 레코드 깊이.
+/// - `records`: 결과를 추가할 레코드 목록.
 fn serialize_group_child_records(
     child: &ShapeObject,
     comp_level: u16, // SHAPE_COMPONENT level
@@ -2307,6 +2353,27 @@ fn serialize_group_child_records(
             }
             records.push(Record {
                 tag_id: tags::HWPTAG_SHAPE_COMPONENT_RECTANGLE,
+                level: type_level,
+                size: 0,
+                data: w.into_bytes(),
+            });
+        }
+        ShapeObject::TextArt(art) => {
+            records.push(Record {
+                tag_id: tags::HWPTAG_SHAPE_COMPONENT,
+                level: comp_level,
+                size: 0,
+                data: serialize_drawing_shape_component(
+                    tags::SHAPE_TEXTART_ID,
+                    &art.drawing,
+                    false,
+                ),
+            });
+            serialize_text_box_if_present(&art.drawing, type_level, records);
+            let mut w = ByteWriter::new();
+            write_shape_detail(child, &mut w).unwrap();
+            records.push(Record {
+                tag_id: tags::HWPTAG_SHAPE_COMPONENT_TEXTART,
                 level: type_level,
                 size: 0,
                 data: w.into_bytes(),

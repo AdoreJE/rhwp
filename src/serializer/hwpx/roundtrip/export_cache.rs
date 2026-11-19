@@ -84,6 +84,7 @@ fn project_caption(caption: &mut Option<Caption>) {
     }
 }
 
+/// 내보내기용 도형 사본 `shape`에서 글상자와 캡션, 그룹 자식의 캐시를 정리한다.
 fn project_shape(shape: &mut ShapeObject) {
     if let Some(drawing) = shape.drawing_mut() {
         if let Some(text_box) = &mut drawing.text_box {
@@ -93,6 +94,7 @@ fn project_shape(shape: &mut ShapeObject) {
     let caption = match shape {
         ShapeObject::Line(shape) => &mut shape.drawing.caption,
         ShapeObject::Rectangle(shape) => &mut shape.drawing.caption,
+        ShapeObject::TextArt(shape) => &mut shape.drawing.caption,
         ShapeObject::Ellipse(shape) => &mut shape.drawing.caption,
         ShapeObject::Arc(shape) => &mut shape.drawing.caption,
         ShapeObject::Polygon(shape) => &mut shape.drawing.caption,

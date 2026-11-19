@@ -1097,6 +1097,7 @@ fn sweep_shape(base: &str, a: &ShapeObject, b: &ShapeObject, out: &mut Divergenc
 }
 
 /// 도형에서 하위 문단·자식을 비운다(속성 전수 비교용 사본 준비).
+/// 도형 사본 `s`에서 별도로 비교할 하위 문단과 그룹 자식을 비운다.
 fn strip_shape(s: &mut ShapeObject) {
     use ShapeObject::*;
     macro_rules! drawing {
@@ -1112,6 +1113,7 @@ fn strip_shape(s: &mut ShapeObject) {
     match s {
         Line(x) => drawing!(x),
         Rectangle(x) => drawing!(x),
+        TextArt(x) => drawing!(x),
         Ellipse(x) => drawing!(x),
         Arc(x) => drawing!(x),
         Polygon(x) => drawing!(x),
@@ -1143,11 +1145,13 @@ fn strip_shape(s: &mut ShapeObject) {
     }
 }
 
+/// 도형 `s`의 글상자를 반환한다. 없으면 `None`을 반환한다.
 fn shape_text_box(s: &ShapeObject) -> Option<&crate::model::shape::TextBox> {
     use ShapeObject::*;
     match s {
         Line(x) => x.drawing.text_box.as_ref(),
         Rectangle(x) => x.drawing.text_box.as_ref(),
+        TextArt(x) => x.drawing.text_box.as_ref(),
         Ellipse(x) => x.drawing.text_box.as_ref(),
         Arc(x) => x.drawing.text_box.as_ref(),
         Polygon(x) => x.drawing.text_box.as_ref(),
@@ -1158,11 +1162,13 @@ fn shape_text_box(s: &ShapeObject) -> Option<&crate::model::shape::TextBox> {
     }
 }
 
+/// 도형 `s`의 캡션 슬롯을 반환한다.
 fn shape_caption(s: &ShapeObject) -> &Option<crate::model::shape::Caption> {
     use ShapeObject::*;
     match s {
         Line(x) => &x.drawing.caption,
         Rectangle(x) => &x.drawing.caption,
+        TextArt(x) => &x.drawing.caption,
         Ellipse(x) => &x.drawing.caption,
         Arc(x) => &x.drawing.caption,
         Polygon(x) => &x.drawing.caption,

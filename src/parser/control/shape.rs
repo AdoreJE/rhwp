@@ -8,7 +8,7 @@ use crate::model::image::{ImageEffect, Picture};
 use crate::model::shape::{
     ArcShape, Caption, ChartShape, CommonObjAttr, CurveShape, DrawingObjAttr, EllipseShape,
     GroupShape, HorzAlign, HorzRelTo, LineShape, OleDrawingAspect, OleShape, PolygonShape,
-    RectangleShape, ShapeComponentAttr, ShapeObject, TextWrap, VertAlign, VertRelTo,
+    RectangleShape, ShapeComponentAttr, ShapeObject, TextArtShape, TextWrap, VertAlign, VertRelTo,
 };
 use crate::model::style::{Fill, ShapeBorderLine};
 use crate::model::Padding;
@@ -23,7 +23,12 @@ use crate::parser::tags;
 // 그리기 개체 ('gso ')
 // ============================================================
 
-/// 그리기 개체 컨트롤 파싱
+/// 공통 속성과 개별 레코드로 그리기 개체를 파싱한다.
+///
+/// - ctrl_data: 컨트롤 ID를 제외한 공통 배치 속성 바이트.
+/// - child_records: 컨트롤에 속한 레코드.
+///
+/// 도형 또는 그림 컨트롤을 반환하며, 인식하지 못한 도형은 사각형으로 보존한다.
 pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> Control {
     // CTRL_HEADER에서 공통 개체 속성 파싱
     let common = parse_common_obj_attr(ctrl_data);
@@ -100,6 +105,10 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
             | tags::HWPTAG_SHAPE_COMPONENT_PICTURE
                 if record.level <= base_level + 1 =>
             {
+                shape_tag_id = Some(record.tag_id);
+                shape_tag_data = &record.data;
+            }
+            tags::HWPTAG_SHAPE_COMPONENT_TEXTART if record.level == base_level + 1 => {
                 shape_tag_id = Some(record.tag_id);
                 shape_tag_data = &record.data;
             }
@@ -205,6 +214,13 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
 
     // 캡션을 drawing에 저장 (도형 공통)
     drawing.caption = caption;
+
+    if shape_tag_id == Some(tags::HWPTAG_SHAPE_COMPONENT_TEXTART)
+        && drawing.shape_attr.ctrl_id != tags::SHAPE_CONTAINER_ID
+    {
+        let text_art = parse_text_art(common, drawing, shape_tag_data);
+        return Control::Shape(Box::new(ShapeObject::TextArt(Box::new(text_art))));
+    }
 
     // Task #195: 차트 우선 분기 (CHART_DATA가 있으면 GSO 다른 태그 종류와 무관하게 차트로 분류)
     if let Some(raw_chart) = chart_data_bytes.take() {
@@ -659,6 +675,44 @@ fn parse_shape_component_full(data: &[u8]) -> ShapeComponentParsed {
 /// 절단한다(크래시 대신 깊은 중첩 유실 — 실문서의 그룹 중첩은 이에 한참 못 미친다).
 const MAX_HWP5_SHAPE_DEPTH: u32 = 256;
 
+/// 글맵시의 네 꼭짓점과 길이 접두 UTF-16 문자열을 읽는다.
+///
+/// - common: 개체의 공통 배치 속성.
+/// - drawing: SHAPE_COMPONENT에서 읽은 그리기 속성.
+/// - data: HWPTAG_SHAPE_COMPONENT_TEXTART 페이로드.
+///
+/// 글맵시 개체를 반환한다. 레코드가 잘렸으면 읽은 필드만 채운다.
+fn parse_text_art(common: CommonObjAttr, drawing: DrawingObjAttr, data: &[u8]) -> TextArtShape {
+    let mut shape = TextArtShape {
+        common,
+        drawing,
+        ..Default::default()
+    };
+    let mut reader = ByteReader::new(data);
+    for corner in &mut shape.corners {
+        let (Ok(x), Ok(y)) = (reader.read_i32(), reader.read_i32()) else {
+            return shape;
+        };
+        *corner = Point { x, y };
+    }
+    let Ok(text) = reader.read_hwp_string() else {
+        return shape;
+    };
+    shape.text = text;
+    if let Ok(font_name) = reader.read_hwp_string() {
+        shape.font_name = font_name;
+        shape.raw_hwp_tail = reader
+            .read_bytes(reader.remaining())
+            .unwrap_or_default()
+            .to_vec();
+    }
+    shape
+}
+
+/// 묶음 레코드에서 직접 소속된 그리기 개체를 순서대로 반환한다.
+///
+/// - child_records: 묶음의 요소 및 자손 레코드.
+/// - depth: 현재 묶음 깊이. 상한을 넘으면 빈 목록을 반환한다.
 fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeObject> {
     let mut children = Vec::new();
     if depth > MAX_HWP5_SHAPE_DEPTH {
@@ -753,7 +807,8 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
                 | tags::HWPTAG_SHAPE_COMPONENT_ARC
                 | tags::HWPTAG_SHAPE_COMPONENT_POLYGON
                 | tags::HWPTAG_SHAPE_COMPONENT_CURVE
-                | tags::HWPTAG_SHAPE_COMPONENT_PICTURE => {
+                | tags::HWPTAG_SHAPE_COMPONENT_PICTURE
+                | tags::HWPTAG_SHAPE_COMPONENT_TEXTART => {
                     shape_tag_id = Some(record.tag_id);
                     shape_tag_data = &record.data;
                     break;
@@ -836,7 +891,7 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
         let has_container_tag = child_slice[1..]
             .iter()
             .any(|r| r.tag_id == tags::HWPTAG_SHAPE_COMPONENT_CONTAINER);
-        if has_container_tag
+        if (has_container_tag && shape_tag_id != Some(tags::HWPTAG_SHAPE_COMPONENT_TEXTART))
             || has_nested_shapes
             || child_drawing.shape_attr.ctrl_id == tags::SHAPE_CONTAINER_ID
         {
@@ -849,6 +904,9 @@ fn parse_container_children(child_records: &[Record], depth: u32) -> Vec<ShapeOb
 
         // 도형 생성
         let shape = match shape_tag_id {
+            Some(tags::HWPTAG_SHAPE_COMPONENT_TEXTART) => ShapeObject::TextArt(Box::new(
+                parse_text_art(CommonObjAttr::default(), child_drawing, shape_tag_data),
+            )),
             Some(tags::HWPTAG_SHAPE_COMPONENT_LINE) => {
                 let mut line = LineShape::default();
                 let is_connector = child_drawing.shape_attr.ctrl_id == tags::SHAPE_CONNECTOR_ID;

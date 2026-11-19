@@ -270,6 +270,7 @@ impl<'a> Scan<'a, '_> {
             Control::Unknown(_) => Err(self.unsupported("Unknown")),
         }
     }
+    /// 가져올 `shape`의 배치와 하위 개체를 검증한다. 미지원 유형, 원시 데이터 또는 잘못된 참조가 있으면 오류를 반환한다.
     fn shape(&mut self, shape: &'a ShapeObject) -> Result<(), Error> {
         self.keep(SourceNode::Shape(shape));
         self.common(shape.common(), &[])?;
@@ -289,6 +290,7 @@ impl<'a> Scan<'a, '_> {
                 }
             }
             ShapeObject::Polygon(p) => self.raw_empty(&p.raw_trailing, "polygon tail")?,
+            ShapeObject::TextArt(s) => self.raw_empty(&s.raw_hwp_tail, "textart tail")?,
             ShapeObject::Rectangle(_)
             | ShapeObject::Ellipse(_)
             | ShapeObject::Arc(_)

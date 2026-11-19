@@ -118,6 +118,10 @@ pub(super) fn dump_shape_control(shape: &ShapeObject, prefix: &str) {
     dump_shape(shape, "  ");
 }
 
+/// 도형의 종류와 공통 속성을 출력하고 그룹 자식을 순회한다.
+///
+/// - `shape`: 출력할 도형.
+/// - `indent`: 출력 줄의 들여쓰기.
 fn dump_shape(shape: &ShapeObject, indent: &str) {
     match shape {
         ShapeObject::Line(line) => {
@@ -162,6 +166,14 @@ fn dump_shape(shape: &ShapeObject, indent: &str) {
             dump_common(&rectangle.common, indent);
             dump_shape_attr(&rectangle.drawing.shape_attr, indent);
             dump_text_box(rectangle.drawing.text_box.as_ref(), indent);
+        }
+        ShapeObject::TextArt(art) => {
+            println!(
+                "{}[글맵시] text={:?} font={:?}",
+                indent, art.text, art.font_name
+            );
+            dump_common(&art.common, indent);
+            dump_shape_attr(&art.drawing.shape_attr, indent);
         }
         ShapeObject::Ellipse(ellipse) => {
             println!("{}[타원]", indent);
