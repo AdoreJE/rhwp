@@ -830,11 +830,17 @@ fn register_border_fills_in_control(
 /// `ShapeObject`(그리기 개체) 하나의 글상자·캡션과, 묶음이면 자식 개체까지 재귀한다.
 ///
 /// 캡션 자리는 변형마다 다르다(#4319 가 렌더 쪽에서 이미 지적한 비대칭과 같은 축):
-/// - 기본 6종(Line/Rectangle/Ellipse/Arc/Polygon/Curve): `drawing.caption`
+/// - 일반 도형과 글맵시: `drawing.caption`
 /// - `Group`/`Picture`(묶음 내 자식으로서의 그림): 자기 struct 의 `caption`
 /// - `Chart`/`Ole`: 자기 struct 의 `caption` — 파서(`src/parser/control/shape.rs:213,222`)가
 ///   `drawing.caption` 을 `.take()` 로 옮기므로 `drawing.caption` 은 항상 `None` 이다. 그래도
 ///   방어적으로 두 자리를 모두 확인한다(렌더의 `shape_caption_for_layout` 폴백과 동형).
+///
+/// - `ctx`: 등록 대상 직렬화 문맥.
+/// - `shape`: 순회할 도형.
+/// - `depth`: 현재 중첩 깊이. 한도에 도달하면 순회를 마친다.
+///
+/// 리소스 등록 또는 저장 오류를 전달한다.
 fn register_border_fills_in_shape(
     ctx: &mut SerializeContext,
     shape: &crate::model::shape::ShapeObject,
@@ -878,7 +884,8 @@ fn register_border_fills_in_shape(
         | ShapeObject::Ellipse(_)
         | ShapeObject::Arc(_)
         | ShapeObject::Polygon(_)
-        | ShapeObject::Curve(_) => {
+        | ShapeObject::Curve(_)
+        | ShapeObject::TextArt(_) => {
             if let Some(caption) = shape.drawing().and_then(|d| d.caption.as_ref()) {
                 register_border_fills_in_paragraphs(ctx, &caption.paragraphs, depth + 1)?;
             }

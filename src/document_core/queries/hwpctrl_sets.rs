@@ -1774,10 +1774,12 @@ impl DocumentCore {
     }
 
     /// 캡션이 담기는 자리 — 갈래마다 `drawing` 밑이거나 제 몸에 붙어 있다.
+    /// `shape`의 캡션 슬롯을 가변 참조로 반환한다.
     fn shape_caption_slot(shape: &mut ShapeObject) -> &mut Option<Caption> {
         match shape {
             ShapeObject::Line(s) => &mut s.drawing.caption,
             ShapeObject::Rectangle(s) => &mut s.drawing.caption,
+            ShapeObject::TextArt(s) => &mut s.drawing.caption,
             ShapeObject::Ellipse(s) => &mut s.drawing.caption,
             ShapeObject::Arc(s) => &mut s.drawing.caption,
             ShapeObject::Polygon(s) => &mut s.drawing.caption,

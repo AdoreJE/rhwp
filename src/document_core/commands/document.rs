@@ -651,6 +651,10 @@ impl DocumentCore {
 
     /// 저장 줄이 없는 캡션을 실제 프레임 너비와 원본 글자모양으로 구성한다.
     /// 기존 저장 줄과 컨트롤 호스트는 별도 계약이므로 재조판하지 않는다.
+    /// - `paragraphs`: 캡션을 소유한 문단 목록.
+    /// - `styles`: 해석한 글자와 문단 스타일.
+    /// - `dpi`: 화면 해상도.
+    /// - `depth`: 현재 컨트롤 중첩 깊이. 한도에 도달하면 순회를 마친다.
     fn reflow_unstored_caption_paragraphs(
         paragraphs: &mut [crate::model::paragraph::Paragraph],
         styles: &ResolvedStyleSet,
@@ -681,6 +685,7 @@ impl DocumentCore {
                         let caption = match shape.as_mut() {
                             ShapeObject::Line(s) => &mut s.drawing.caption,
                             ShapeObject::Rectangle(s) => &mut s.drawing.caption,
+                            ShapeObject::TextArt(s) => &mut s.drawing.caption,
                             ShapeObject::Ellipse(s) => &mut s.drawing.caption,
                             ShapeObject::Arc(s) => &mut s.drawing.caption,
                             ShapeObject::Polygon(s) => &mut s.drawing.caption,
@@ -2165,12 +2170,16 @@ impl DocumentCore {
         }
     }
 
+    /// `shape`와 그 자손의 캡션 및 글상자에서 임시 저장 줄을 지운다.
     fn clear_missing_lineseg_placeholders_in_shape(shape: &mut ShapeObject) {
         match shape {
             ShapeObject::Line(line) => {
                 Self::clear_missing_lineseg_placeholders_in_drawing(&mut line.drawing)
             }
             ShapeObject::Rectangle(rect) => {
+                Self::clear_missing_lineseg_placeholders_in_drawing(&mut rect.drawing)
+            }
+            ShapeObject::TextArt(rect) => {
                 Self::clear_missing_lineseg_placeholders_in_drawing(&mut rect.drawing)
             }
             ShapeObject::Ellipse(ellipse) => {
@@ -3664,12 +3673,16 @@ impl DocumentCore {
         }
     }
 
+    /// `shape`와 그 자손의 캡션 및 글상자에서 필요한 임시 저장 줄을 채운다.
     fn materialize_missing_lineseg_paragraphs_in_shape(shape: &mut ShapeObject) {
         match shape {
             ShapeObject::Line(line) => {
                 Self::materialize_missing_lineseg_paragraphs_in_drawing(&mut line.drawing)
             }
             ShapeObject::Rectangle(rect) => {
+                Self::materialize_missing_lineseg_paragraphs_in_drawing(&mut rect.drawing)
+            }
+            ShapeObject::TextArt(rect) => {
                 Self::materialize_missing_lineseg_paragraphs_in_drawing(&mut rect.drawing)
             }
             ShapeObject::Ellipse(ellipse) => {

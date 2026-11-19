@@ -389,10 +389,12 @@ pub(crate) fn inline_shape_width_hu(shape: &ShapeObject) -> i32 {
     }
 }
 
+/// 배치에 사용할 `shape`의 캡션을 복제해 반환한다. 차트와 OLE는 별도 캡션이 없으면 공통 캡션을 사용한다.
 pub(crate) fn shape_caption_for_layout(shape: &ShapeObject) -> Option<Caption> {
     match shape {
         ShapeObject::Line(s) => s.drawing.caption.clone(),
         ShapeObject::Rectangle(s) => s.drawing.caption.clone(),
+        ShapeObject::TextArt(s) => s.drawing.caption.clone(),
         ShapeObject::Ellipse(s) => s.drawing.caption.clone(),
         ShapeObject::Arc(s) => s.drawing.caption.clone(),
         ShapeObject::Polygon(s) => s.drawing.caption.clone(),

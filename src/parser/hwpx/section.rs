@@ -659,6 +659,13 @@ fn parse_paragraph_element(
     parse_paragraph_body(e, reader, self_closing)
 }
 
+/// 문단의 텍스트와 개체 슬롯을 읽는다.
+///
+/// - `e`: 문단 요소.
+/// - `reader`: 문단 요소 다음 이벤트를 읽는 리더.
+/// - `self_closing`: 자기닫힘 문단이면 하위 이벤트를 읽지 않는다.
+///
+/// 문단과 구역 정의가 있으면 함께 반환하며 XML 또는 속성 오류를 전달한다.
 fn parse_paragraph_body(
     e: &quick_xml::events::BytesStart,
     reader: &mut Reader<&[u8]>,
@@ -895,9 +902,9 @@ fn parse_paragraph_body(
                         parse_lineseg_array(reader, &mut para)?;
                     }
                     b"rect" | b"ellipse" | b"line" | b"connectLine" | b"arc" | b"polygon"
-                    | b"curve" => {
+                    | b"curve" | b"textart" => {
                         // 그리기 객체 파싱
-                        let shape = parse_shape_object(local, ce, reader)?;
+                        let shape = parse_shape_object(local, ce, reader, false)?;
                         push_object_slot_placeholder(&mut text_parts);
                         para.controls.push(shape);
                     }
@@ -998,6 +1005,11 @@ fn parse_paragraph_body(
                         }
                         let utf16_pos = calc_utf16_len_from_parts(&text_parts);
                         char_shape_changes.push((utf16_pos, current_char_shape_id));
+                    }
+                    b"textart" => {
+                        let shape = parse_shape_object(local, ce, reader, true)?;
+                        push_object_slot_placeholder(&mut text_parts);
+                        para.controls.push(shape);
                     }
                     b"lineBreak" | b"softHyphen" => {
                         text_parts.push("\n".to_string());
@@ -4720,11 +4732,19 @@ fn parse_draw_text_body(
 
 // ─── 그리기 객체 파싱 (rect, ellipse, line, arc, polygon, curve) ───
 
-/// `<hp:rect>`, `<hp:ellipse>` 등 그리기 객체를 파싱하여 `Control::Shape`를 반환한다.
+/// 일반 도형과 글맵시를 공통 배치 속성과 함께 파싱한다.
+///
+/// - shape_type: 네임스페이스 접두사를 제외한 도형 요소 이름.
+/// - e: 도형의 시작 또는 자기닫힘 요소.
+/// - reader: 도형 요소 다음 이벤트부터 읽는 XML 리더.
+/// - empty: 자기닫힘이면 후속 이벤트를 소비하지 않는다.
+///
+/// 그리기 컨트롤을 반환하며 하위 요소의 XML 오류를 전달한다.
 fn parse_shape_object(
     shape_type: &[u8],
     e: &quick_xml::events::BytesStart,
     reader: &mut Reader<&[u8]>,
+    empty: bool,
 ) -> Result<Control, HwpxError> {
     let mut common = CommonObjAttr::default();
     let mut shape_attr = ShapeComponentAttr::default();
@@ -4764,10 +4784,15 @@ fn parse_shape_object(
     let mut connect_end_subject_index = 0_u32;
     let mut connect_control_points = Vec::new();
 
+    let mut font_name = String::new();
+    let mut text_shape = None;
     let tag_name = String::from_utf8_lossy(shape_type).to_string();
     let mut caption: Option<crate::model::shape::Caption> = None;
     let mut buf = Vec::new();
     loop {
+        if empty {
+            break;
+        }
         let event = reader.read_event_into(&mut buf);
         // [#5797] 자기닫힘 표기(`<hp:x/>`)에는 자식도 종료 태그도 없다. 여는 태그로
         // 보고 하위 파서를 태우면 그 파서가 없는 종료 태그를 찾아 이 도형의 남은
@@ -4807,6 +4832,20 @@ fn parse_shape_object(
                             parse_draw_text(reader, &mut tb)?;
                         }
                         text_box = Some(tb);
+                    }
+                    b"textartPr" if shape_type == b"textart" => {
+                        for attr in ce.attributes().flatten() {
+                            match attr.key.as_ref().as_bytes() {
+                                b"fontName" => font_name = attr_str(&attr),
+                                b"textShape" => text_shape = Some(attr_str(&attr)),
+                                _ => {}
+                            }
+                        }
+                        if !self_closing {
+                            reader
+                                .read_to_end(cname)
+                                .map_err(|e| HwpxError::XmlError(format!("textartPr: {e}")))?;
+                        }
                     }
                     b"pt0" => {
                         for attr in ce.attributes().flatten() {
@@ -4982,6 +5021,23 @@ fn parse_shape_object(
     };
 
     let shape = match shape_type {
+        b"textart" => ShapeObject::TextArt(Box::new(crate::model::shape::TextArtShape {
+            common,
+            drawing,
+            text: e
+                .attributes()
+                .flatten()
+                .find(|attr| attr.key.as_ref().as_bytes() == b"text")
+                .map(|attr| attr_str(&attr))
+                .unwrap_or_default(),
+            font_name,
+            text_shape,
+            corners: std::array::from_fn(|i| crate::model::Point {
+                x: x_coords[i],
+                y: y_coords[i],
+            }),
+            ..Default::default()
+        })),
         b"rect" => ShapeObject::Rectangle(RectangleShape {
             common,
             drawing,
@@ -5113,6 +5169,13 @@ fn parse_container(
     parse_container_body(e, reader, depth)
 }
 
+/// 묶음의 배치 속성과 자식 개체를 읽는다.
+///
+/// - `e`: 묶음 시작 요소.
+/// - `reader`: 시작 요소 다음 이벤트를 읽는 리더.
+/// - `depth`: 현재 묶음 깊이.
+///
+/// 묶음 컨트롤을 반환하며 하위 요소의 XML 오류를 전달한다.
 fn parse_container_body(
     e: &quick_xml::events::BytesStart,
     reader: &mut Reader<&[u8]>,
@@ -5162,11 +5225,11 @@ fn parse_container_body(
                         }
                     }
                     b"rect" | b"ellipse" | b"line" | b"connectLine" | b"arc" | b"polygon"
-                    | b"curve"
-                        if !self_closing =>
+                    | b"curve" | b"textart"
+                        if !self_closing || local == b"textart" =>
                     {
                         // 자식 그리기 객체
-                        let child = parse_shape_object(local, ce, reader)?;
+                        let child = parse_shape_object(local, ce, reader, self_closing)?;
                         if let Control::Shape(shape) = child {
                             children.push(*shape);
                         }

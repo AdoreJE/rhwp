@@ -881,10 +881,12 @@ fn summarize_shape(shape: &ShapeObject, summary: &mut IrSummary) {
     }
 }
 
+/// `shape`가 가진 캡션을 반환한다. 없으면 `None`을 반환한다.
 fn shape_caption(shape: &ShapeObject) -> Option<&crate::model::shape::Caption> {
     match shape {
         ShapeObject::Line(s) => s.drawing.caption.as_ref(),
         ShapeObject::Rectangle(s) => s.drawing.caption.as_ref(),
+        ShapeObject::TextArt(s) => s.drawing.caption.as_ref(),
         ShapeObject::Ellipse(s) => s.drawing.caption.as_ref(),
         ShapeObject::Arc(s) => s.drawing.caption.as_ref(),
         ShapeObject::Polygon(s) => s.drawing.caption.as_ref(),

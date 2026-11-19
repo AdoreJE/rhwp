@@ -69,6 +69,8 @@ impl Walk {
         Ok(())
     }
 
+    /// `root`에서 소유 관계를 따라 순회하며 각 노드에 `visitor`를 호출한다.
+    /// 할당 실패, 순회 한도 초과 및 방문자가 반환한 오류를 전달한다.
     fn walk(
         &mut self,
         root: Node<'_>,
@@ -197,7 +199,8 @@ impl Walk {
                         | ShapeObject::Ellipse(_)
                         | ShapeObject::Arc(_)
                         | ShapeObject::Polygon(_)
-                        | ShapeObject::Curve(_) => {}
+                        | ShapeObject::Curve(_)
+                        | ShapeObject::TextArt(_) => {}
                     }
                 }
                 Node::Ole(o) => {

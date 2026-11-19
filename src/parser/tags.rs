@@ -154,6 +154,8 @@ pub const CTRL_GEN_SHAPE: u32 = ctrl_id(b"gso ");
 pub const SHAPE_PICTURE_ID: u32 = ctrl_id(b"$pic");
 /// OLE 도형 (SHAPE_COMPONENT 내부 ctrl_id)
 pub const SHAPE_OLE_ID: u32 = ctrl_id(b"$ole");
+/// 글맵시 개체 ID
+pub const SHAPE_TEXTART_ID: u32 = ctrl_id(b"$tat");
 /// 사각형 (SHAPE_COMPONENT 내부 ctrl_id)
 pub const SHAPE_RECT_ID: u32 = ctrl_id(b"$rec");
 /// 직선 (SHAPE_COMPONENT 내부 ctrl_id)

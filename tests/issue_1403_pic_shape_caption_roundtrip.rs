@@ -51,10 +51,12 @@ fn walk_para(para: &Paragraph, out: &mut Vec<(&'static str, String)>) {
     }
 }
 
+/// `shape`와 하위 문단 및 그룹 자식의 캡션을 종류와 함께 `out`에 추가한다.
 fn walk_shape(shape: &ShapeObject, out: &mut Vec<(&'static str, String)>) {
     let (kind, cap): (&'static str, &Option<Caption>) = match shape {
         ShapeObject::Line(x) => ("shape", &x.drawing.caption),
         ShapeObject::Rectangle(x) => ("shape", &x.drawing.caption),
+        ShapeObject::TextArt(x) => ("shape", &x.drawing.caption),
         ShapeObject::Ellipse(x) => ("shape", &x.drawing.caption),
         ShapeObject::Arc(x) => ("shape", &x.drawing.caption),
         ShapeObject::Polygon(x) => ("shape", &x.drawing.caption),
@@ -79,18 +81,9 @@ fn walk_shape(shape: &ShapeObject, out: &mut Vec<(&'static str, String)>) {
     }
 }
 
+/// 도형 `s`의 공통 글상자를 반환한다. 없으면 `None`을 반환한다.
 fn shape_text_box(s: &ShapeObject) -> Option<&rhwp::model::shape::TextBox> {
-    match s {
-        ShapeObject::Line(x) => x.drawing.text_box.as_ref(),
-        ShapeObject::Rectangle(x) => x.drawing.text_box.as_ref(),
-        ShapeObject::Ellipse(x) => x.drawing.text_box.as_ref(),
-        ShapeObject::Arc(x) => x.drawing.text_box.as_ref(),
-        ShapeObject::Polygon(x) => x.drawing.text_box.as_ref(),
-        ShapeObject::Curve(x) => x.drawing.text_box.as_ref(),
-        ShapeObject::Chart(x) => x.drawing.text_box.as_ref(),
-        ShapeObject::Ole(x) => x.drawing.text_box.as_ref(),
-        ShapeObject::Group(_) | ShapeObject::Picture(_) => None,
-    }
+    s.drawing().and_then(|drawing| drawing.text_box.as_ref())
 }
 
 fn count_kind(caps: &[(&'static str, String)], kind: &str) -> usize {

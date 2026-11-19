@@ -12,10 +12,12 @@ use crate::model::paragraph::Paragraph;
 use crate::model::shape::{Caption, CaptionDirection, CaptionVertAlign, ShapeObject};
 
 impl DocumentCore {
+    /// `shape`의 캡션을 반환한다. 캡션이 없으면 `None`을 반환한다.
     fn shape_caption_ref(shape: &ShapeObject) -> Option<&Caption> {
         match shape {
             ShapeObject::Line(s) => s.drawing.caption.as_ref(),
             ShapeObject::Rectangle(s) => s.drawing.caption.as_ref(),
+            ShapeObject::TextArt(s) => s.drawing.caption.as_ref(),
             ShapeObject::Ellipse(s) => s.drawing.caption.as_ref(),
             ShapeObject::Arc(s) => s.drawing.caption.as_ref(),
             ShapeObject::Polygon(s) => s.drawing.caption.as_ref(),
@@ -27,10 +29,12 @@ impl DocumentCore {
         }
     }
 
+    /// `shape`의 캡션 슬롯을 가변 참조로 반환한다.
     fn shape_caption_mut(shape: &mut ShapeObject) -> &mut Option<Caption> {
         match shape {
             ShapeObject::Line(s) => &mut s.drawing.caption,
             ShapeObject::Rectangle(s) => &mut s.drawing.caption,
+            ShapeObject::TextArt(s) => &mut s.drawing.caption,
             ShapeObject::Ellipse(s) => &mut s.drawing.caption,
             ShapeObject::Arc(s) => &mut s.drawing.caption,
             ShapeObject::Polygon(s) => &mut s.drawing.caption,
@@ -42,6 +46,7 @@ impl DocumentCore {
         }
     }
 
+    /// `shape`의 캡션과 존재 비트를 지우고, 캡션이 있었는지 반환한다.
     fn clear_shape_caption(shape: &mut ShapeObject) -> bool {
         let had_caption = Self::shape_caption_ref(shape).is_some()
             || shape
@@ -50,6 +55,7 @@ impl DocumentCore {
         match shape {
             ShapeObject::Line(s) => s.drawing.caption = None,
             ShapeObject::Rectangle(s) => s.drawing.caption = None,
+            ShapeObject::TextArt(s) => s.drawing.caption = None,
             ShapeObject::Ellipse(s) => s.drawing.caption = None,
             ShapeObject::Arc(s) => s.drawing.caption = None,
             ShapeObject::Polygon(s) => s.drawing.caption = None,
@@ -1713,6 +1719,11 @@ impl DocumentCore {
         )))
     }
     /// 그룹 자식 개체들을 비례 스케일 (크기/위치/도형좌표 포함)
+    /// 그룹 자식의 배치와 좌표를 조정한다.
+    ///
+    /// - `children`: 조정할 그룹 자식.
+    /// - `sx`: 가로 배율.
+    /// - `sy`: 세로 배율.
     fn scale_group_children(children: &mut [crate::model::shape::ShapeObject], sx: f64, sy: f64) {
         use crate::model::shape::ShapeObject as SO;
         fn sp(v: i32, s: f64) -> i32 {
@@ -1744,6 +1755,12 @@ impl DocumentCore {
                     let h = new_ch as i32;
                     s.x_coords = [0, w, w, 0];
                     s.y_coords = [0, 0, h, h];
+                }
+                SO::TextArt(s) => {
+                    for corner in &mut s.corners {
+                        corner.x = sp(corner.x, sx);
+                        corner.y = sp(corner.y, sy);
+                    }
                 }
                 SO::Ellipse(ref mut s) => {
                     s.center.x = sp(s.center.x, sx);
@@ -1794,18 +1811,7 @@ impl DocumentCore {
             }
 
             // shape_attr 동기화
-            let sa = match child {
-                SO::Line(s) => &mut s.drawing.shape_attr,
-                SO::Rectangle(s) => &mut s.drawing.shape_attr,
-                SO::Ellipse(s) => &mut s.drawing.shape_attr,
-                SO::Arc(s) => &mut s.drawing.shape_attr,
-                SO::Polygon(s) => &mut s.drawing.shape_attr,
-                SO::Curve(s) => &mut s.drawing.shape_attr,
-                SO::Group(g) => &mut g.shape_attr,
-                SO::Picture(p) => &mut p.shape_attr,
-                SO::Chart(c) => &mut c.drawing.shape_attr,
-                SO::Ole(o) => &mut o.drawing.shape_attr,
-            };
+            let sa = child.shape_attr_mut();
             sa.offset_x = new_horz as i32;
             sa.offset_y = new_vert as i32;
             sa.current_width = new_cw;

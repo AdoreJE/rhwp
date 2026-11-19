@@ -427,6 +427,7 @@ fn debug_border_data() {
     }
 }
 
+/// BookReview의 구역과 도형 종류를 출력한다. 샘플이 없으면 실행을 건너뛴다.
 #[test]
 fn dump_bookreview_section1_controls() {
     let path = std::path::Path::new("samples/basic/BookReview.hwp");
@@ -516,6 +517,7 @@ fn dump_bookreview_section1_controls() {
                             crate::model::shape::ShapeObject::Picture(_) => "Picture",
                             crate::model::shape::ShapeObject::Chart(_) => "Chart",
                             crate::model::shape::ShapeObject::Ole(_) => "Ole",
+                            crate::model::shape::ShapeObject::TextArt(_) => "TextArt",
                         };
                         let common = shape.common();
                         let has_textbox = shape.drawing().and_then(|d| d.text_box.as_ref());
@@ -619,7 +621,7 @@ fn dump_bookreview_section1_controls() {
     }
 }
 
-/// Helper to print a control briefly at given indent level
+/// `ctrl`의 유형을 `idx` 순번과 `indent` 깊이로 짧게 출력한다.
 fn dump_control_brief(ctrl: &Control, idx: usize, indent: usize) {
     let pad = " ".repeat(indent);
     match ctrl {
@@ -645,6 +647,7 @@ fn dump_control_brief(ctrl: &Control, idx: usize, indent: usize) {
                 crate::model::shape::ShapeObject::Picture(_) => "Picture",
                 crate::model::shape::ShapeObject::Chart(_) => "Chart",
                 crate::model::shape::ShapeObject::Ole(_) => "Ole",
+                crate::model::shape::ShapeObject::TextArt(_) => "TextArt",
             };
             let has_tb = s.drawing().and_then(|d| d.text_box.as_ref());
             if let Some(tb) = has_tb {

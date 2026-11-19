@@ -538,6 +538,8 @@ pub enum ShapeObject {
     Chart(Box<ChartShape>),
     /// OLE 개체 (HWPTAG_SHAPE_COMPONENT_OLE)
     Ole(Box<OleShape>),
+    /// 글맵시 개체
+    TextArt(Box<TextArtShape>),
 }
 
 impl ShapeObject {
@@ -554,6 +556,7 @@ impl ShapeObject {
             ShapeObject::Picture(p) => &p.common,
             ShapeObject::Chart(c) => &c.common,
             ShapeObject::Ole(o) => &o.common,
+            ShapeObject::TextArt(s) => &s.common,
         }
     }
 
@@ -570,6 +573,7 @@ impl ShapeObject {
             ShapeObject::Picture(p) => &mut p.common,
             ShapeObject::Chart(c) => &mut c.common,
             ShapeObject::Ole(o) => &mut o.common,
+            ShapeObject::TextArt(s) => &mut s.common,
         }
     }
 
@@ -584,6 +588,7 @@ impl ShapeObject {
             ShapeObject::Curve(s) => Some(&s.drawing),
             ShapeObject::Chart(c) => Some(&c.drawing),
             ShapeObject::Ole(o) => Some(&o.drawing),
+            ShapeObject::TextArt(s) => Some(&s.drawing),
             ShapeObject::Group(_) | ShapeObject::Picture(_) => None,
         }
     }
@@ -599,6 +604,7 @@ impl ShapeObject {
             ShapeObject::Curve(s) => Some(&mut s.drawing),
             ShapeObject::Chart(c) => Some(&mut c.drawing),
             ShapeObject::Ole(o) => Some(&mut o.drawing),
+            ShapeObject::TextArt(s) => Some(&mut s.drawing),
             ShapeObject::Group(_) | ShapeObject::Picture(_) => None,
         }
     }
@@ -669,6 +675,7 @@ impl ShapeObject {
             ShapeObject::Picture(p) => &p.shape_attr,
             ShapeObject::Chart(c) => &c.drawing.shape_attr,
             ShapeObject::Ole(o) => &o.drawing.shape_attr,
+            ShapeObject::TextArt(s) => &s.drawing.shape_attr,
         }
     }
 
@@ -781,6 +788,7 @@ impl ShapeObject {
             ShapeObject::Picture(p) => &mut p.shape_attr,
             ShapeObject::Chart(c) => &mut c.drawing.shape_attr,
             ShapeObject::Ole(o) => &mut o.drawing.shape_attr,
+            ShapeObject::TextArt(s) => &mut s.drawing.shape_attr,
         }
     }
 
@@ -797,8 +805,28 @@ impl ShapeObject {
             ShapeObject::Picture(_) => "그림(묶음내)",
             ShapeObject::Chart(_) => "차트",
             ShapeObject::Ole(_) => "OLE",
+            ShapeObject::TextArt(_) => "글맵시",
         }
     }
+}
+
+/// 글맵시 개체 (HWPTAG_SHAPE_COMPONENT_TEXTART, hp:textart).
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct TextArtShape {
+    /// 공통 배치 속성
+    pub common: CommonObjAttr,
+    /// 그리기 공통 속성
+    pub drawing: DrawingObjAttr,
+    /// 글맵시 문자열
+    pub text: String,
+    /// 원본에서 지정한 글꼴 이름
+    pub font_name: String,
+    /// HWPX에서 지정한 모양 이름
+    pub text_shape: Option<String>,
+    /// 원본 좌표계의 네 꼭짓점
+    pub corners: [Point; 4],
+    /// HWP 5.x 글꼴 이름 뒤에 저장된 모양 및 효과 데이터
+    pub raw_hwp_tail: Vec<u8>,
 }
 
 /// 직선 개체 (HWPTAG_SHAPE_COMPONENT_LINE)

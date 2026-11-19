@@ -145,6 +145,12 @@ fn assign_auto_numbers_with_source(
     }
 }
 
+/// 컨트롤 및 하위 문단에 자동 번호를 부여한다.
+///
+/// - `controls`: 번호를 계산할 컨트롤 목록.
+/// - `counters`: 현재 번호 상태.
+/// - `counter_index`: 번호 종류에서 카운터 인덱스를 구하는 함수.
+/// - `caption_number`: 캡션에 전달할 개체 번호. 없으면 기존 번호 흐름을 사용한다.
 fn assign_auto_numbers_in_controls(
     controls: &mut [crate::model::control::Control],
     counters: &mut AutoNumberCounters,
@@ -278,6 +284,19 @@ fn assign_auto_numbers_in_controls(
                         );
                     }
                     ShapeObject::Rectangle(s) => {
+                        assign_caption_auto_numbers(
+                            &mut s.drawing.caption,
+                            counters,
+                            counter_index,
+                            object_number,
+                        );
+                        assign_text_box_auto_numbers(
+                            &mut s.drawing.text_box,
+                            counters,
+                            counter_index,
+                        );
+                    }
+                    ShapeObject::TextArt(s) => {
                         assign_caption_auto_numbers(
                             &mut s.drawing.caption,
                             counters,

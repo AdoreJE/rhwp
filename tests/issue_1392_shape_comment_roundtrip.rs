@@ -11,11 +11,13 @@ use rhwp::serializer::hwpx::serialize_hwpx;
 
 /// 문서 전체에서 (경로종류, description) 멀티셋을 수집한다.
 fn collect_descriptions(doc: &rhwp::model::document::Document) -> Vec<(String, String)> {
+    /// 도형 `s`와 묶음 자식의 비어 있지 않은 설명을 종류와 함께 반환한다.
     fn shape_kind_desc(s: &ShapeObject) -> Vec<(String, String)> {
         let mut out = Vec::new();
         let (kind, desc) = match s {
             ShapeObject::Line(x) => ("line", &x.common.description),
             ShapeObject::Rectangle(x) => ("rect", &x.common.description),
+            ShapeObject::TextArt(x) => ("textart", &x.common.description),
             ShapeObject::Ellipse(x) => ("ellipse", &x.common.description),
             ShapeObject::Arc(x) => ("arc", &x.common.description),
             ShapeObject::Polygon(x) => ("polygon", &x.common.description),
