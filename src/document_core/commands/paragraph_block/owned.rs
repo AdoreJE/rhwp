@@ -200,7 +200,9 @@ impl Walk {
                         | ShapeObject::Arc(_)
                         | ShapeObject::Polygon(_)
                         | ShapeObject::Curve(_)
-                        | ShapeObject::TextArt(_) => {}
+                        | ShapeObject::TextArt(_)
+                        | ShapeObject::Video(_)
+                        | ShapeObject::Unknown(_) => {}
                     }
                 }
                 Node::Ole(o) => {

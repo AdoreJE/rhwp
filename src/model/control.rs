@@ -1018,6 +1018,10 @@ pub enum FormType {
     RadioButton,
     /// 입력 상자
     Edit,
+    /// 목록 상자
+    ListBox,
+    /// 스크롤 막대
+    ScrollBar,
 }
 
 /// 양식 개체 ('form' 컨트롤, ctrl_id=0x666f726d)
@@ -1045,7 +1049,7 @@ pub struct FormObject {
     pub fore_color: u32,
     /// 배경 색 (0x00BBGGRR)
     pub back_color: u32,
-    /// 선택 상태 (CheckBox/RadioButton: 0=해제, 1=선택)
+    /// 선택 상태 (CheckBox/RadioButton) 또는 스크롤 막대의 현재 값.
     pub value: i32,
     /// 활성화 여부
     pub enabled: bool,

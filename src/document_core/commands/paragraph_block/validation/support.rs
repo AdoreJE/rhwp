@@ -291,6 +291,8 @@ impl<'a> Scan<'a, '_> {
             }
             ShapeObject::Polygon(p) => self.raw_empty(&p.raw_trailing, "polygon tail")?,
             ShapeObject::TextArt(s) => self.raw_empty(&s.raw_hwp_tail, "textart tail")?,
+            ShapeObject::Video(_) => return Err(self.unsupported("Video")),
+            ShapeObject::Unknown(_) => return Err(self.unsupported("UnknownShape")),
             ShapeObject::Rectangle(_)
             | ShapeObject::Ellipse(_)
             | ShapeObject::Arc(_)

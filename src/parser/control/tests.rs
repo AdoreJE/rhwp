@@ -518,6 +518,8 @@ fn dump_bookreview_section1_controls() {
                             crate::model::shape::ShapeObject::Chart(_) => "Chart",
                             crate::model::shape::ShapeObject::Ole(_) => "Ole",
                             crate::model::shape::ShapeObject::TextArt(_) => "TextArt",
+                            crate::model::shape::ShapeObject::Video(_) => "Video",
+                            crate::model::shape::ShapeObject::Unknown(_) => "UnknownShape",
                         };
                         let common = shape.common();
                         let has_textbox = shape.drawing().and_then(|d| d.text_box.as_ref());
@@ -648,6 +650,8 @@ fn dump_control_brief(ctrl: &Control, idx: usize, indent: usize) {
                 crate::model::shape::ShapeObject::Chart(_) => "Chart",
                 crate::model::shape::ShapeObject::Ole(_) => "Ole",
                 crate::model::shape::ShapeObject::TextArt(_) => "TextArt",
+                crate::model::shape::ShapeObject::Video(_) => "Video",
+                crate::model::shape::ShapeObject::Unknown(_) => "UnknownShape",
             };
             let has_tb = s.drawing().and_then(|d| d.text_box.as_ref());
             if let Some(tb) = has_tb {

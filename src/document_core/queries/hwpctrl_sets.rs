@@ -1780,6 +1780,8 @@ impl DocumentCore {
             ShapeObject::Line(s) => &mut s.drawing.caption,
             ShapeObject::Rectangle(s) => &mut s.drawing.caption,
             ShapeObject::TextArt(s) => &mut s.drawing.caption,
+            ShapeObject::Video(s) => &mut s.drawing.caption,
+            ShapeObject::Unknown(s) => &mut s.drawing.caption,
             ShapeObject::Ellipse(s) => &mut s.drawing.caption,
             ShapeObject::Arc(s) => &mut s.drawing.caption,
             ShapeObject::Polygon(s) => &mut s.drawing.caption,

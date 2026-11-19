@@ -309,6 +309,32 @@ fn assign_auto_numbers_in_controls(
                             counter_index,
                         );
                     }
+                    ShapeObject::Video(s) => {
+                        assign_caption_auto_numbers(
+                            &mut s.drawing.caption,
+                            counters,
+                            counter_index,
+                            object_number,
+                        );
+                        assign_text_box_auto_numbers(
+                            &mut s.drawing.text_box,
+                            counters,
+                            counter_index,
+                        );
+                    }
+                    ShapeObject::Unknown(s) => {
+                        assign_caption_auto_numbers(
+                            &mut s.drawing.caption,
+                            counters,
+                            counter_index,
+                            object_number,
+                        );
+                        assign_text_box_auto_numbers(
+                            &mut s.drawing.text_box,
+                            counters,
+                            counter_index,
+                        );
+                    }
                     ShapeObject::Ellipse(s) => {
                         assign_caption_auto_numbers(
                             &mut s.drawing.caption,

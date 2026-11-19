@@ -95,6 +95,8 @@ fn project_shape(shape: &mut ShapeObject) {
         ShapeObject::Line(shape) => &mut shape.drawing.caption,
         ShapeObject::Rectangle(shape) => &mut shape.drawing.caption,
         ShapeObject::TextArt(shape) => &mut shape.drawing.caption,
+        ShapeObject::Video(shape) => &mut shape.drawing.caption,
+        ShapeObject::Unknown(shape) => &mut shape.drawing.caption,
         ShapeObject::Ellipse(shape) => &mut shape.drawing.caption,
         ShapeObject::Arc(shape) => &mut shape.drawing.caption,
         ShapeObject::Polygon(shape) => &mut shape.drawing.caption,

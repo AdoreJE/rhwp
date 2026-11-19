@@ -18,6 +18,8 @@ impl DocumentCore {
             ShapeObject::Line(s) => s.drawing.caption.as_ref(),
             ShapeObject::Rectangle(s) => s.drawing.caption.as_ref(),
             ShapeObject::TextArt(s) => s.drawing.caption.as_ref(),
+            ShapeObject::Video(s) => s.drawing.caption.as_ref(),
+            ShapeObject::Unknown(s) => s.drawing.caption.as_ref(),
             ShapeObject::Ellipse(s) => s.drawing.caption.as_ref(),
             ShapeObject::Arc(s) => s.drawing.caption.as_ref(),
             ShapeObject::Polygon(s) => s.drawing.caption.as_ref(),
@@ -35,6 +37,8 @@ impl DocumentCore {
             ShapeObject::Line(s) => &mut s.drawing.caption,
             ShapeObject::Rectangle(s) => &mut s.drawing.caption,
             ShapeObject::TextArt(s) => &mut s.drawing.caption,
+            ShapeObject::Video(s) => &mut s.drawing.caption,
+            ShapeObject::Unknown(s) => &mut s.drawing.caption,
             ShapeObject::Ellipse(s) => &mut s.drawing.caption,
             ShapeObject::Arc(s) => &mut s.drawing.caption,
             ShapeObject::Polygon(s) => &mut s.drawing.caption,
@@ -56,6 +60,8 @@ impl DocumentCore {
             ShapeObject::Line(s) => s.drawing.caption = None,
             ShapeObject::Rectangle(s) => s.drawing.caption = None,
             ShapeObject::TextArt(s) => s.drawing.caption = None,
+            ShapeObject::Video(s) => s.drawing.caption = None,
+            ShapeObject::Unknown(s) => s.drawing.caption = None,
             ShapeObject::Ellipse(s) => s.drawing.caption = None,
             ShapeObject::Arc(s) => s.drawing.caption = None,
             ShapeObject::Polygon(s) => s.drawing.caption = None,
@@ -1757,6 +1763,13 @@ impl DocumentCore {
                     s.y_coords = [0, 0, h, h];
                 }
                 SO::TextArt(s) => {
+                    for corner in &mut s.corners {
+                        corner.x = sp(corner.x, sx);
+                        corner.y = sp(corner.y, sy);
+                    }
+                }
+                SO::Video(_) => {}
+                SO::Unknown(s) => {
                     for corner in &mut s.corners {
                         corner.x = sp(corner.x, sx);
                         corner.y = sp(corner.y, sy);

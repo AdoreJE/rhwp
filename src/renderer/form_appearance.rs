@@ -172,6 +172,7 @@ fn arc(out: &mut Vec<FormPrimitive>, x: f64, y: f64, r: f64, start: f64, color: 
 }
 
 /// 고정 bbox 안에서 UI 외형과 label 원점을 함께 만든다. 모델 선택값/본문 흐름은 바꾸지 않는다.
+/// `form`의 외형을 `b` 사각형에 구성하여 반환한다. 면적이 없으면 빈 외형을 반환한다.
 pub fn form_drawing(form: &FormObjectNode, b: BoundingBox) -> FormDrawing {
     let mut out = Vec::new();
     if b.width <= 0.0 || b.height <= 0.0 {
@@ -197,7 +198,7 @@ pub fn form_drawing(form: &FormObjectNode, b: BoundingBox) -> FormDrawing {
             }
             tx = b.x + (b.width - a.label_width) / 2.0;
         }
-        FormType::Edit | FormType::ComboBox => {
+        FormType::Edit | FormType::ComboBox | FormType::ListBox | FormType::ScrollBar => {
             rect(&mut out, b, &form.back_color);
             if a.draw_frame {
                 bevel(&mut out, b, s, false);

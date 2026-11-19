@@ -291,6 +291,36 @@ fn resolve_master_page_hrefs<'a, 'b>(
     (hrefs, missing_refs)
 }
 
+thread_local! {
+    static VIDEO_BIN_REFS: std::cell::RefCell<HashMap<String, u16>> = std::cell::RefCell::new(HashMap::new());
+}
+
+struct VideoBinRefs(HashMap<String, u16>);
+
+impl VideoBinRefs {
+    /// 문서 매니페스트 `items`의 원본 ID를 BinData 순번에 연결하고 이전 매핑을 보관한다.
+    fn enter(items: &[content::PackageItem]) -> Self {
+        let mapping = items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| Some((item.id.clone(), u16::try_from(index + 1).ok()?)))
+            .collect();
+        Self(VIDEO_BIN_REFS.replace(mapping))
+    }
+}
+
+impl Drop for VideoBinRefs {
+    /// 문서 파싱을 마치면 이전 BinData 매핑을 복원한다.
+    fn drop(&mut self) {
+        VIDEO_BIN_REFS.replace(std::mem::take(&mut self.0));
+    }
+}
+
+/// `reference`에 해당하는 현재 문서의 BinData ID를 반환한다. 미해결이면 None이다.
+fn resolve_video_bin_ref(reference: &str) -> Option<u16> {
+    VIDEO_BIN_REFS.with_borrow(|mapping| mapping.get(reference).copied())
+}
+
 /// [#3460] `binaryItemIDRef` 를 매니페스트 위치 기준 정규 이름(`image{N}`)으로 통일한다.
 ///
 /// 섹션 파서는 `binaryItemIDRef` 에서 **숫자만 뽑아** `bin_data_id` 로 쓰고(숫자 불변식,
@@ -454,6 +484,9 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
     parse_hwpx_with_reservation(data, None)
 }
 
+/// HWPX의 `data`를 읽어 문서 모델을 반환한다.
+/// `reservation`은 지연 BinData 리더가 사용할 선택적 저장 예산이다.
+/// 패키지, 지원하지 않는 암호화 형식, XML 또는 저장 예산 오류를 전달한다.
 pub(crate) fn parse_hwpx_with_reservation(
     data: &[u8],
     reservation: Option<std::sync::Arc<dyn crate::storage::Reservation>>,
@@ -537,6 +570,7 @@ pub(crate) fn parse_hwpx_with_reservation(
         content_xml.clone().into_bytes(),
     ));
     let package_info = content::parse_content_hpf(&content_xml)?;
+    let _video_bin_refs = VideoBinRefs::enter(&package_info.bin_data_items);
 
     // 3. header.xml → DocInfo, DocProperties
     let header_xml = reader.read_file("Contents/header.xml")?;
