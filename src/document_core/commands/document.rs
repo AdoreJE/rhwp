@@ -8,6 +8,7 @@ mod metafile_fonts;
 mod reflowed_table_frames;
 mod section_activation;
 
+use crate::document_core::queries::rendering::PageLayerTrees;
 use crate::document_core::validation::{
     CellPath, ValidationReport, ValidationWarning, WarningKind,
 };
@@ -30,6 +31,112 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 type ManagedLineCachePlan = Vec<(usize, Vec<Paragraph>)>;
+
+/// 앞부분 임시 조판과 전체 조판이 공유하는 읽기 전용 파싱 결과다.
+pub struct PageLayerSource {
+    parsed: crate::parser::ParsedDocument,
+    source_format: crate::parser::FileFormat,
+}
+
+impl PageLayerSource {
+    /// 문서 바이트 data를 파싱해 쪽 경계 계산 전의 소스를 반환한다.
+    ///
+    /// # Errors
+    /// 형식, 인증 또는 손상에 따른 파싱 오류를 반환한다.
+    pub fn parse(data: &[u8]) -> Result<Self, crate::parser::ParseError> {
+        Ok(Self {
+            parsed: crate::parser::parse_document_for_core(data, None)?,
+            source_format: crate::parser::detect_format(data),
+        })
+    }
+
+    /// 첫 구역의 최대 paragraph_limit개 문단으로 임시 레이어 트리 반복자를 만든다.
+    /// 앞부분이 문서 전체이거나 전체 쪽 수가 필요한 문서는 None을 반환한다.
+    ///
+    /// # Errors
+    /// 앞부분을 조판할 수 없으면 HwpError를 반환한다.
+    pub fn preview(
+        &mut self,
+        paragraph_limit: usize,
+    ) -> Result<Option<PageLayerTrees<DocumentCore>>, HwpError> {
+        let document = &mut self.parsed.document;
+        let Some(first) = document.sections.first() else {
+            return Ok(None);
+        };
+        if paragraph_limit == 0
+            || (document.sections.len() == 1 && first.paragraphs.len() <= paragraph_limit)
+        {
+            return Ok(None);
+        }
+        // shortcut: 전체 쪽 수 필드가 있는 문서는 첫 쪽 전에 전체 쪽을 나눔. 이런 문서가 느리면 완료 후 해당 쪽만 다시 그리기로 바꿈
+        if has_total_page_field(document) {
+            return Ok(None);
+        }
+        let prefix = crate::model::document::Section {
+            section_def: first.section_def.clone(),
+            paragraphs: first.paragraphs[..first.paragraphs.len().min(paragraph_limit)].to_vec(),
+            ..Default::default()
+        };
+        // 전체 본문을 복제하지 않고 스타일과 참조 리소스를 앞부분에 공유한다.
+        let sections = std::mem::replace(&mut document.sections, vec![prefix]);
+        let prefix = document.clone();
+        document.sections = sections;
+        Self {
+            parsed: crate::parser::ParsedDocument {
+                document: prefix,
+                hml_metadata: None,
+                #[cfg(feature = "pdf-import")]
+                pdf_metadata: None,
+            },
+            source_format: self.source_format,
+        }
+        .finish_pagination()
+        .map(Some)
+    }
+
+    /// 원본 문서의 전체 쪽 경계를 계산하고 확정 레이어 트리 반복자를 반환한다.
+    ///
+    /// # Errors
+    /// 모델 정규화 또는 전체 조판에 실패하면 HwpError를 반환한다.
+    pub fn finish_pagination(self) -> Result<PageLayerTrees<DocumentCore>, HwpError> {
+        self.into_read_only_core().map(DocumentCore::into_page_layer_trees)
+    }
+
+    /// 파싱 결과를 쪽 경계와 렌더용 컨트롤 기록을 갖춘 읽기 전용 Core로 바꾼다.
+    ///
+    /// # Errors
+    /// 모델 정규화 또는 조판에 실패하면 HwpError를 반환한다.
+    fn into_read_only_core(self) -> Result<DocumentCore, HwpError> {
+        let mut core = DocumentCore::prepare_parsed_document_with_storage(
+            self.parsed,
+            self.source_format,
+            &crate::storage::Unbounded,
+        )?;
+        core.document.seal_body_control_provenance();
+        Ok(core)
+    }
+}
+
+/// document의 본문·바탕쪽과 중첩 컨트롤에 전체 쪽 수 필드 또는 표시 문자가 있으면 참을 반환한다.
+fn has_total_page_field(document: &Document) -> bool {
+    use crate::model::control::AutoNumberType;
+    use crate::model::identity::walk::{walk_ref, RefNode};
+
+    document.sections.iter().any(|section| {
+        std::iter::once(section.paragraphs.as_slice())
+            .chain(section.section_def.master_pages.iter().map(|master| master.paragraphs.as_slice()))
+            .any(|paragraphs| {
+                let mut found = false;
+                walk_ref(paragraphs, &crate::storage::Unbounded, |node| {
+                    found |= matches!(node, RefNode::Paragraph(para) if para.text.contains('\u{0016}'))
+                        || matches!(node, RefNode::Control(Control::AutoNumber(number)) if number.number_type == AutoNumberType::TotalPage);
+                    Ok(())
+                })
+                .unwrap_or_else(|never| match never {});
+                found
+            })
+    })
+}
 
 mod reparsed_split_cache;
 #[path = "stored_body_frames.rs"]
@@ -168,8 +275,21 @@ impl DocumentCore {
         loaded
     }
 
+    /// 문서 바이트를 읽어 편집 가능한 Core를 반환한다.
+    ///
+    /// # Errors
+    /// 형식, 인증, 파싱 또는 조판 오류를 반환한다.
     pub fn from_bytes(data: &[u8]) -> Result<DocumentCore, HwpError> {
-        Self::from_bytes_inner(data, None)
+        Self::from_bytes_inner(data, None, true)
+    }
+
+    /// 문서 바이트를 읽어 화면용 레이어 트리를 순차 생성하는 반복자를 반환한다.
+    /// 쪽 경계를 먼저 계산하고 편집·저장 전용 원본 상태 기록을 생략한다.
+    ///
+    /// # Errors
+    /// 형식, 인증, 파싱 또는 초기 조판 오류를 반환한다.
+    pub fn open_page_layer_trees(data: &[u8]) -> Result<PageLayerTrees<Self>, HwpError> {
+        Self::from_bytes_inner(data, None, false).map(Self::into_page_layer_trees)
     }
 
     /// 문서를 열어 현재 Core를 원자적으로 교체한다.
@@ -178,22 +298,29 @@ impl DocumentCore {
     /// 각 파서의 계약을 따른다(HWP5 지연 이미지 복호화 등).
     /// 성공 뒤 기존 조회 API로 완성된 문서를 사용한다. 인증·파싱에 실패하면 현재
     /// 문서와 편집 상태를 그대로 유지한다. 성공하면 새 문서의 초기 상태로 교체한다.
+    /// data는 문서 바이트이며 password는 필요한 경우에 제공하는 암호 바이트다.
+    ///
+    /// # Errors
+    /// 형식, 인증, 파싱 또는 조판 오류를 반환한다.
     pub fn load_bytes(&mut self, data: &[u8], password: Option<&[u8]>) -> Result<(), HwpError> {
-        let replacement = Self::from_bytes_inner(data, password)?;
+        let replacement = Self::from_bytes_inner(data, password, true)?;
         *self = replacement;
         Ok(())
     }
 
-    /// 비밀번호로 보호된 HWP/HWPX 파일을 비밀번호와 함께 로드한다.
+    /// HWP/HWPX 문서 바이트와 비밀번호 바이트를 읽어 편집 가능한 Core를 반환한다.
     ///
     /// HWP5 EncryptVersion 4, 압축 HWP3 및 ODF AES-256-CBC HWPX 비밀번호 암호 문서를 연다.
     /// 비밀번호가 틀리면 `HwpError::InvalidFile`로 래핑된 암호 불일치/손상 오류가
     /// 반환된다. 암호화되지 않은 HWPX는 기존 파서 경로로 열린다.
+    ///
+    /// # Errors
+    /// 비밀번호 불일치나 손상, 파싱 또는 조판에 실패하면 HwpError를 반환한다.
     pub fn from_bytes_with_password(
         data: &[u8],
         password: &[u8],
     ) -> Result<DocumentCore, HwpError> {
-        Self::from_bytes_inner(data, Some(password))
+        Self::from_bytes_inner(data, Some(password), true)
     }
 
     /// PDF의 전체 또는 선택한 원본 쪽을 직접 IR로 가져와 공통 Core를 초기화한다.
@@ -220,7 +347,16 @@ impl DocumentCore {
         crate::document_core::PdfImportSession::new(policy)?.open(data, options)
     }
 
-    fn from_bytes_inner(data: &[u8], password: Option<&[u8]>) -> Result<DocumentCore, HwpError> {
+    /// data를 선택적 password로 읽어 Core를 반환한다.
+    /// editable이면 편집·저장에 쓰이는 원본 상태를 보존한다. PDF는 전용 세션에서 연다.
+    ///
+    /// # Errors
+    /// 형식, 인증, 파싱 또는 조판 오류를 반환한다.
+    fn from_bytes_inner(
+        data: &[u8],
+        password: Option<&[u8]>,
+        editable: bool,
+    ) -> Result<DocumentCore, HwpError> {
         let source_format = crate::parser::detect_format(data);
         #[cfg(feature = "pdf-import")]
         if source_format == crate::parser::FileFormat::Pdf {
@@ -230,23 +366,42 @@ impl DocumentCore {
         }
         let parsed = crate::parser::parse_document_for_core(data, password)
             .map_err(|e| HwpError::InvalidFile(e.to_string()))?;
-        Self::from_parsed_document(parsed, source_format)
+        let storage = &crate::storage::Unbounded;
+        if editable {
+            return Self::from_parsed_document_with_storage(parsed, source_format, storage);
+        }
+        PageLayerSource { parsed, source_format }.into_read_only_core()
     }
 
-    fn from_parsed_document(
+    /// parsed와 원본 형식을 받아 storage 한도 내에서 편집 가능한 Core를 반환한다.
+    /// 조판 뒤 저장·복구용 원본 상태를 기록한다.
+    ///
+    /// # Errors
+    /// 조판이나 원본 상태 기록이 실패하거나 storage 한도를 넘으면 HwpError를 반환한다.
+    pub(crate) fn from_parsed_document_with_storage<S: crate::storage::Storage>(
         parsed: crate::parser::ParsedDocument,
         source_format: crate::parser::FileFormat,
-    ) -> Result<DocumentCore, HwpError> {
-        Self::from_parsed_document_with_storage(
-            parsed,
-            source_format,
-            &crate::renderer::style_resolver::storage::Unbounded,
-        )
+        storage: &S,
+    ) -> Result<DocumentCore, HwpError>
+    where
+        S::Error: std::fmt::Display,
+    {
+        let storage_error = |error| HwpError::InvalidFile(format!("PDF 오류: {error}"));
+        let mut doc = Self::prepare_parsed_document_with_storage(parsed, source_format, storage)?;
+        // [#4488/#4495] 로드 보정과 첫 조판이 모델에 반영된 뒤 원본 재사용 기준을 기록한다.
+        doc.document.seal_body_raw_provenance();
+        doc.capture_loaded_source_frames_with_storage(storage)
+            .map_err(storage_error)?;
+        storage.bytes(0).map_err(storage_error)?;
+        Ok(doc)
     }
 
-    pub(crate) fn from_parsed_document_with_storage<
-        S: crate::renderer::style_resolver::storage::Storage,
-    >(
+    /// parsed와 원본 형식을 받아 storage 한도 내에서 쪽을 나눈 Core를 반환한다.
+    /// 편집·저장 전용 원본 기록은 호출자가 사용 목적에 맞춰 만든다.
+    ///
+    /// # Errors
+    /// 모델 정규화, 조판 또는 storage 한도 오류를 반환한다.
+    fn prepare_parsed_document_with_storage<S: crate::storage::Storage>(
         parsed: crate::parser::ParsedDocument,
         source_format: crate::parser::FileFormat,
         storage: &S,
@@ -505,17 +660,6 @@ impl DocumentCore {
             })?;
         doc.paginate_with_storage(storage)
             .map_err(|error| HwpError::InvalidFile(format!("PDF 오류: PDF pagination: {error}")))?;
-
-        // [#4488/#4495] 로드 픽스업(손상 lineseg 제거·빈 문단 reflow·안내문 제거)과
-        // 첫 paginate 의 materialization(그림 img_dim 등)까지 끝난 뒤 본문을 다시
-        // 봉인한다 — 파서 말미 봉인 그대로면 무변경 문서의 원본 바이트 통과가
-        // 로드 경로의 모델 보정 차이로 죽는다(honbo-save imgDim 실측). 이 지점
-        // 이후 본문 변경은 편집 명령(raw_stream 무효화 동반) 또는 공개 모델 직접
-        // 변경(봉인이 잡아야 할 대상)뿐이다.
-        doc.document.seal_body_raw_provenance();
-        doc.capture_loaded_source_frames_with_storage(storage)
-            .map_err(storage_error)?;
-        storage.bytes(0).map_err(storage_error)?;
         Ok(doc)
     }
 

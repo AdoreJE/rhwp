@@ -436,16 +436,22 @@ impl crate::model::document::Document {
     /// 시점에 호출. 컨트롤 봉인을 먼저 세우고(봉인 필드는 `#[serde(skip)]` 이라
     /// Section 다이제스트에 실리지 않는다) Section 봉인을 계산한다.
     pub fn seal_body_raw_provenance(&mut self) {
+        self.seal_body_control_provenance();
+        self.seal_section_tail_provenance();
+        self.seal_loaded_memo_tails();
+        for section in &mut self.sections {
+            section.seal_raw_provenance();
+        }
+    }
+
+    /// 본문과 바탕쪽의 컨트롤 원본 상태를 기록한다.
+    /// 읽기 전용 렌더러도 표의 원본 배치 판정에 이 기록을 사용한다.
+    pub(crate) fn seal_body_control_provenance(&mut self) {
         for section in &mut self.sections {
             seal_raw_bearing_controls(&mut section.paragraphs);
             for master_page in &mut section.section_def.master_pages {
                 seal_raw_bearing_controls(&mut master_page.paragraphs);
             }
-        }
-        self.seal_section_tail_provenance();
-        self.seal_loaded_memo_tails();
-        for section in &mut self.sections {
-            section.seal_raw_provenance();
         }
     }
 

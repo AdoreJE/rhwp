@@ -45,6 +45,7 @@ use crate::renderer::svg::SvgRenderer;
 use crate::renderer::svg_layer::SvgLayerRenderer;
 use crate::renderer::typeset::TypesetEngine;
 use crate::renderer::TextStyle;
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -58,6 +59,54 @@ const FOCUSED_PAGE_REPAINT_PAD: f64 = 3.0;
 struct PageLayerSequence {
     numbering: ReplayedNumbering,
     float_carve_evidence: HashMap<(usize, i32), Arc<[FloatCarveEvidence]>>,
+}
+
+/// 편집하지 않는 Core의 화면용 레이어 트리를 요청할 때마다 한 쪽씩 조판한다.
+/// 이미 반환한 트리는 보관하지 않는다.
+pub struct PageLayerTrees<C> {
+    core: C,
+    sequence: PageLayerSequence,
+    remaining: std::ops::Range<u32>,
+}
+
+impl<C: Borrow<DocumentCore>> PageLayerTrees<C> {
+    fn new(core: C) -> Self {
+        Self {
+            remaining: 0..core.borrow().page_count(),
+            core,
+            sequence: PageLayerSequence::default(),
+        }
+    }
+
+    /// Core가 나눈 전체 쪽 수를 반환한다. 레이어 트리 생성 여부와 무관하다.
+    pub fn page_count(&self) -> u32 {
+        self.remaining.end
+    }
+}
+
+impl<C: Borrow<DocumentCore>> Iterator for PageLayerTrees<C> {
+    type Item = Result<PageLayerTree, HwpError>;
+
+    /// 다음 화면용 레이어 트리를 반환한다. 순회를 끝냈으면 `None`이다.
+    ///
+    /// # Errors
+    /// 계측이나 쪽 조판에 실패하면 해당 오류를 한 번 반환하고 순회를 끝낸다.
+    fn next(&mut self) -> Option<Self::Item> {
+        let page_num = self.remaining.next()?;
+        let core = self.core.borrow();
+        let result = core.require_portable_metrics().and_then(|()| {
+            core.build_canvas_page_layer_tree_shared_with_profile(
+                page_num,
+                RenderProfile::Screen,
+                Some(&mut self.sequence),
+            )
+            .map(Arc::unwrap_or_clone)
+        });
+        if result.is_err() {
+            self.remaining.start = self.remaining.end;
+        }
+        Some(result)
+    }
 }
 
 /// 앞쪽에서 이미 진행한 번호 문단과 그 결과 상태다.
@@ -1526,22 +1575,13 @@ impl DocumentCore {
     /// # Errors
     /// 이식 가능한 글꼴 계측이나 쪽 조판에 실패하면 해당 오류를 반환하고 순회를 끝낸다.
     pub fn page_layer_trees(&self) -> impl Iterator<Item = Result<PageLayerTree, HwpError>> + '_ {
-        let mut sequence = Some(PageLayerSequence::default());
-        (0..self.page_count()).map_while(move |page_num| {
-            let current = sequence.as_mut()?;
-            let result = self.require_portable_metrics().and_then(|()| {
-                self.build_canvas_page_layer_tree_shared_with_profile(
-                    page_num,
-                    RenderProfile::Screen,
-                    Some(current),
-                )
-                .map(Arc::unwrap_or_clone)
-            });
-            if result.is_err() {
-                sequence = None;
-            }
-            Some(result)
-        })
+        PageLayerTrees::new(self)
+    }
+
+    /// 이 Core를 소유하며 화면용 레이어 트리를 한 쪽씩 반환하는 반복자를 만든다.
+    /// 쪽 번호와 어울림 배치 상태를 유지하며, 반복자를 버리면 남은 쪽의 조판을 생략한다.
+    pub fn into_page_layer_trees(self) -> PageLayerTrees<Self> {
+        PageLayerTrees::new(self)
     }
 
     /// 브라우저가 글꼴을 관리하는 Canvas2D에서 `page_num` 쪽을 `profile`로 그릴 트리를 반환한다.
