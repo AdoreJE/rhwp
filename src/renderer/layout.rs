@@ -3817,7 +3817,8 @@ pub struct LayoutEngine {
     cell_has_square_float: std::cell::Cell<bool>,
     /// [#6175] 현재 구역의 용지/쪽 기준 어울림 개체 흐름 증거 — 본문 저장 행 admission의
     /// 외부 증거. 조판(TypesetEngine)과 같은 값을 써야 측정·페인트가 갈리지 않는다.
-    body_float_carve_evidence: std::cell::RefCell<Vec<super::float_placement::FloatCarveEvidence>>,
+    body_float_carve_evidence:
+        std::cell::RefCell<std::sync::Arc<[super::float_placement::FloatCarveEvidence]>>,
     /// 총 쪽수 (머리말/꼬리말 필드 치환용)
     total_pages: std::cell::Cell<u32>,
     /// 현재 페이지 번호 (바탕쪽 글상자 쪽번호 치환용)
@@ -4162,7 +4163,7 @@ impl LayoutEngine {
             clip_enabled: std::cell::Cell::new(true),
             hidden_header_footer: std::cell::RefCell::new(std::collections::HashSet::new()),
             cell_has_square_float: std::cell::Cell::new(false),
-            body_float_carve_evidence: std::cell::RefCell::new(Vec::new()),
+            body_float_carve_evidence: Default::default(),
             section_column_spacing_hu: std::cell::Cell::new(None),
             total_pages: std::cell::Cell::new(0),
             current_page_number: std::cell::Cell::new(0),
@@ -4898,6 +4899,11 @@ impl LayoutEngine {
         self.numbering_state.borrow_mut().reset();
     }
 
+    /// 현재 쪽을 그릴 때 사용할 앞쪽 본문 번호 상태를 `state`로 설정한다.
+    pub(crate) fn set_numbering_state(&self, state: NumberingState) {
+        *self.numbering_state.borrow_mut() = state;
+    }
+
     /// [#2403] 소스분기 프로파일 배선 — 종전 set_hwp3_variant + set_hwpx_source
     /// 통합. set_hwp3_variant 의 결합 부수효과(hwp3 변환본 → flow spacing_before
     /// 보정 동시 활성)를 그대로 승계한다; 별도 값이 필요한 호출자는 이어서
@@ -5044,6 +5050,11 @@ impl LayoutEngine {
     /// - `paragraphs`: 본문 구역의 문단 슬라이스
     /// - `header_paragraphs`: 머리말 컨트롤이 속한 구역의 문단 슬라이스 (구역 간 상속 시 다를 수 있음)
     /// - `footer_paragraphs`: 꼬리말 컨트롤이 속한 구역의 문단 슬라이스
+    /// `page_content` 한 쪽의 배치와 `paragraphs`·`composed` 본문으로 렌더 트리를 생성한다.
+    /// `header_paragraphs`와 `footer_paragraphs`는 머리말·꼬리말의 원본 문단이고, `styles`,
+    /// `footnote_shape`, `bin_data_content`, `active_master_page`는 스타일·각주·그림·바탕쪽을 공급한다.
+    /// `measured_tables`, `page_border_fill`, `outline_numbering_id`, `wrap_around_paras`는
+    /// 각각 표 측정값, 쪽 테두리·배경, 개요 번호 ID, 어울림 문단 배치다.
     pub fn build_render_tree(
         &self,
         page_content: &PageContent,
@@ -5060,16 +5071,56 @@ impl LayoutEngine {
         outline_numbering_id: u16,
         wrap_around_paras: &[super::pagination::WrapAroundPara],
     ) -> PageRenderTree {
+        self.build_render_tree_with_float_carve_evidence(
+            page_content,
+            paragraphs,
+            header_paragraphs,
+            footer_paragraphs,
+            composed,
+            styles,
+            footnote_shape,
+            bin_data_content,
+            active_master_page,
+            measured_tables,
+            page_border_fill,
+            outline_numbering_id,
+            wrap_around_paras,
+            None,
+        )
+    }
+
+    /// [`Self::build_render_tree`]와 같은 입력으로 렌더 트리를 반환한다.
+    /// `float_carve_evidence`로 본문 원점과 일치하는 어울림 배치 정보를 받으면 재사용하고,
+    /// 없으면 `paragraphs`와 `page_content`에서 계산한다.
+    pub(crate) fn build_render_tree_with_float_carve_evidence(
+        &self,
+        page_content: &PageContent,
+        paragraphs: &[Paragraph],
+        header_paragraphs: &[Paragraph],
+        footer_paragraphs: &[Paragraph],
+        composed: &[ComposedParagraph],
+        styles: &ResolvedStyleSet,
+        footnote_shape: &FootnoteShape,
+        bin_data_content: &[BinDataContent],
+        active_master_page: Option<&MasterPage>,
+        measured_tables: &[MeasuredTable],
+        page_border_fill: Option<&PageBorderFill>,
+        outline_numbering_id: u16,
+        wrap_around_paras: &[super::pagination::WrapAroundPara],
+        float_carve_evidence: Option<std::sync::Arc<[super::float_placement::FloatCarveEvidence]>>,
+    ) -> PageRenderTree {
         let layout = &page_content.layout;
         // 바탕쪽이 없는 페이지의 머리말도 현재 용지·본문 좌표계를 소비한다.
         self.prime_page_layout_env(layout);
         // [#6175] 본문 저장 행 admission의 외부-기하 증거 - 조판이 구역당 한 번
         // 계산하는 것과 **같은 함수·같은 입력**이라 두 경로가 갈리지 않는다.
-        *self.body_float_carve_evidence.borrow_mut() =
+        *self.body_float_carve_evidence.borrow_mut() = float_carve_evidence.unwrap_or_else(|| {
             super::float_placement::paper_or_page_float_carve_evidence(
                 paragraphs,
                 super::px_to_hwpunit(layout.body_area.y, self.dpi),
-            );
+            )
+            .into()
+        });
         let mut tree = PageRenderTree::new(
             page_content.page_index,
             layout.page_width,
