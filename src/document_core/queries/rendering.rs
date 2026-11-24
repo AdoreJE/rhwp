@@ -26,13 +26,14 @@ use crate::renderer::composer::{
     compose_paragraph, compose_paragraph_with_horizontal_shaping,
     compose_section_with_horizontal_shaping, ComposedParagraph,
 };
+use crate::renderer::float_placement::FloatCarveEvidence;
 use crate::renderer::height_measurer::{HeightMeasurer, MeasuredSection, MeasuredTable};
 use crate::renderer::html::HtmlRenderer;
 use crate::renderer::kerning::{
     ExactFontRegistryRegistration, ExactFontSlot, MAX_KERNING_REGISTRY_SLOTS,
 };
 use crate::renderer::layer_renderer::LayerRenderer;
-use crate::renderer::layout::{estimate_text_width_exact, CellContext};
+use crate::renderer::layout::{estimate_text_width_exact, CellContext, NumberingState};
 use crate::renderer::page_layout::PageLayoutInfo;
 use crate::renderer::pagination::{
     HeaderFooterRef, MasterPageRef, PageContent, PaginationResult, Paginator,
@@ -44,12 +45,76 @@ use crate::renderer::svg::SvgRenderer;
 use crate::renderer::svg_layer::SvgLayerRenderer;
 use crate::renderer::typeset::TypesetEngine;
 use crate::renderer::TextStyle;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
 const MAX_EMBEDDED_FONT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EMBEDDED_FONT_BYTES_PER_PAGE: usize = 64 * 1024 * 1024;
 const FOCUSED_PAGE_REPAINT_PAD: f64 = 3.0;
+
+/// 쪽을 순서대로 생성할 때 앞쪽의 본문 번호와 구역의 어울림 배치 정보를 보존한다.
+#[derive(Default)]
+struct PageLayerSequence {
+    numbering: ReplayedNumbering,
+    float_carve_evidence: HashMap<(usize, i32), Arc<[FloatCarveEvidence]>>,
+}
+
+/// 편집하지 않는 Core의 화면용 레이어 트리를 요청할 때마다 한 쪽씩 조판한다.
+/// 이미 반환한 트리는 보관하지 않는다.
+pub struct PageLayerTrees<C> {
+    core: C,
+    sequence: PageLayerSequence,
+    remaining: std::ops::Range<u32>,
+}
+
+impl<C: Borrow<DocumentCore>> PageLayerTrees<C> {
+    fn new(core: C) -> Self {
+        Self {
+            remaining: 0..core.borrow().page_count(),
+            core,
+            sequence: PageLayerSequence::default(),
+        }
+    }
+
+    /// Core가 나눈 전체 쪽 수를 반환한다. 레이어 트리 생성 여부와 무관하다.
+    pub fn page_count(&self) -> u32 {
+        self.remaining.end
+    }
+}
+
+impl<C: Borrow<DocumentCore>> Iterator for PageLayerTrees<C> {
+    type Item = Result<PageLayerTree, HwpError>;
+
+    /// 다음 화면용 레이어 트리를 반환한다. 순회를 끝냈으면 `None`이다.
+    ///
+    /// # Errors
+    /// 계측이나 쪽 조판에 실패하면 해당 오류를 한 번 반환하고 순회를 끝낸다.
+    fn next(&mut self) -> Option<Self::Item> {
+        let page_num = self.remaining.next()?;
+        let core = self.core.borrow();
+        let result = core.require_portable_metrics().and_then(|()| {
+            core.build_canvas_page_layer_tree_shared_with_profile(
+                page_num,
+                RenderProfile::Screen,
+                Some(&mut self.sequence),
+            )
+            .map(Arc::unwrap_or_clone)
+        });
+        if result.is_err() {
+            self.remaining.start = self.remaining.end;
+        }
+        Some(result)
+    }
+}
+
+/// 앞쪽에서 이미 진행한 번호 문단과 그 결과 상태다.
+#[derive(Default)]
+struct ReplayedNumbering {
+    state: NumberingState,
+    paragraphs: HashSet<(usize, usize)>,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FocusedPageTreePatch {
@@ -1488,34 +1553,59 @@ impl DocumentCore {
             .map(|tree| tree.as_ref().clone())
     }
 
-    /// 같은 페이지·출력 profile의 immutable layer tree를 공유한다.
+    /// `page_num` 쪽의 `profile`용 불변 레이어 트리를 공유한다.
     ///
     /// 캐시 무효화 이후에도 반환한 tree는 해당 시점의 snapshot으로 유효하다.
     /// 호출자가 보유한 `Arc`의 수명은 내부 캐시의 최근 변형 4개 제한과 독립적이다.
+    ///
+    /// # Errors
+    /// 쪽 번호가 범위 밖이거나 계측·조판에 실패하면 오류를 반환한다.
     pub fn build_page_layer_tree_shared_with_profile(
         &self,
         page_num: u32,
         profile: RenderProfile,
     ) -> Result<Arc<PageLayerTree>, HwpError> {
         self.require_portable_metrics()?;
-        self.build_canvas_page_layer_tree_shared_with_profile(page_num, profile)
+        self.build_canvas_page_layer_tree_shared_with_profile(page_num, profile, None)
     }
 
-    /// Canvas2D-only replay entry. Its caller owns the browser font generation;
-    /// portable/native replay must use the guarded generic entry above.
+    /// 화면용 레이어 트리를 첫 쪽부터 순서대로 반환한다. 트리는 내부 캐시에 남기지 않는다.
+    /// 빈 문서는 빈 반복자를 반환한다.
+    ///
+    /// # Errors
+    /// 이식 가능한 글꼴 계측이나 쪽 조판에 실패하면 해당 오류를 반환하고 순회를 끝낸다.
+    pub fn page_layer_trees(&self) -> impl Iterator<Item = Result<PageLayerTree, HwpError>> + '_ {
+        PageLayerTrees::new(self)
+    }
+
+    /// 이 Core를 소유하며 화면용 레이어 트리를 한 쪽씩 반환하는 반복자를 만든다.
+    /// 쪽 번호와 어울림 배치 상태를 유지하며, 반복자를 버리면 남은 쪽의 조판을 생략한다.
+    pub fn into_page_layer_trees(self) -> PageLayerTrees<Self> {
+        PageLayerTrees::new(self)
+    }
+
+    /// 브라우저가 글꼴을 관리하는 Canvas2D에서 `page_num` 쪽을 `profile`로 그릴 트리를 반환한다.
+    ///
+    /// # Errors
+    /// 쪽 번호가 범위 밖이거나 조판에 실패하면 오류를 반환한다.
     pub fn build_canvas_page_layer_tree_with_profile(
         &self,
         page_num: u32,
         profile: RenderProfile,
     ) -> Result<PageLayerTree, HwpError> {
-        self.build_canvas_page_layer_tree_shared_with_profile(page_num, profile)
+        self.build_canvas_page_layer_tree_shared_with_profile(page_num, profile, None)
             .map(|tree| tree.as_ref().clone())
     }
 
+    /// `page_num` 쪽을 `profile`로 변환한다. `sequence`가 있으면 화면용 트리를 캐시 없이 반환한다.
+    ///
+    /// # Errors
+    /// 쪽 번호가 범위 밖이거나 계측·조판에 실패하면 오류를 반환한다.
     fn build_canvas_page_layer_tree_shared_with_profile(
         &self,
         page_num: u32,
         profile: RenderProfile,
+        sequence: Option<&mut PageLayerSequence>,
     ) -> Result<Arc<PageLayerTree>, HwpError> {
         // Canvas 화면의 보충 폭은 인쇄 조판의 정본이 아니다. SVG·Native와
         // 마찬가지로 호출자가 전체 인쇄 쪽수 조회 전에 portable로 전환해야 한다.
@@ -1547,9 +1637,11 @@ impl DocumentCore {
         }
         let fingerprint = self
             .layer_output_options_fingerprint(profile, crate::paint::LayerJsonOptions::default());
-        if let Some(variants) = self.page_layer_tree_cache.borrow().get(idx) {
-            if let Some((_, tree)) = variants.iter().find(|(value, _)| *value == fingerprint) {
-                return Ok(Arc::clone(tree));
+        if sequence.is_none() {
+            if let Some(variants) = self.page_layer_tree_cache.borrow().get(idx) {
+                if let Some((_, tree)) = variants.iter().find(|(value, _)| *value == fingerprint) {
+                    return Ok(Arc::clone(tree));
+                }
             }
         }
         let show_editor_visuals = profile.shows_editor_visuals();
@@ -1560,7 +1652,7 @@ impl DocumentCore {
             clip_enabled: self.clip_enabled,
             debug_overlay: show_editor_visuals && self.debug_overlay,
         };
-        let layer_tree = self.with_page_tree_cached(page_num, |tree| {
+        let lower = |tree: &PageRenderTree| {
             let mut used_font_slots = Vec::new();
             let mut nodes = vec![&tree.root];
             while let Some(node) = nodes.pop() {
@@ -1750,7 +1842,13 @@ impl DocumentCore {
                 .with_hangul2024_print(hangul2024_print)
                 .with_print_crop_marks(self.document.print_crop_marks());
             Ok(builder.build_with_embedded_fonts(tree, &embedded_fonts))
-        })?;
+        };
+        if let Some(sequence) = sequence {
+            let tree =
+                self.build_page_tree_with_header_footer_override(page_num, None, Some(sequence))?;
+            return lower(&tree).map(Arc::new);
+        }
+        let layer_tree = self.with_page_tree_cached(page_num, lower)?;
         let layer_tree = Arc::new(layer_tree);
         {
             let mut cache = self.page_layer_tree_cache.borrow_mut();
@@ -8343,11 +8441,15 @@ impl DocumentCore {
         })
     }
 
-    /// 구역 첫 페이지에 요청한 HF 정의를 임시로 투영한 렌더 트리.
+    /// `page_num` 쪽에 `section_idx` 구역의 머리말·꼬리말 정의를 투영한 렌더 트리를 반환한다.
+    /// `is_header`는 머리말 여부, `apply_to`는 정의의 적용 범위다.
     ///
     /// 실제 page tree cache와 섞지 않고 마지막 편집 target 한 건만 재사용한다. 선택
     /// 드래그는 hit-test와 selection geometry를 프레임마다 연속 조회하므로, 캐시가
     /// 없으면 같은 대표 페이지를 매번 full build하게 된다 (#6452).
+    ///
+    /// # Errors
+    /// 편집 대상이나 대표 쪽을 찾을 수 없거나 쪽 조판에 실패하면 오류를 반환한다.
     pub fn build_header_footer_edit_preview_tree(
         &self,
         page_num: u32,
@@ -8374,20 +8476,30 @@ impl DocumentCore {
         let tree = self.build_page_tree_with_header_footer_override(
             page_num,
             Some((section_idx, is_header, apply_to)),
+            None,
         )?;
         *self.header_footer_preview_tree_cache.borrow_mut() = Some((key, tree.clone()));
         Ok(tree)
     }
 
-    /// 페이지 렌더 트리를 빌드한다.
+    /// 0부터 시작하는 `page_num` 쪽의 렌더 트리를 반환한다.
+    ///
+    /// # Errors
+    /// 쪽이 범위 밖이거나 본문 쪽 번호 필드를 계산하지 못하면 오류를 반환한다.
     pub(crate) fn build_page_tree(&self, page_num: u32) -> Result<PageRenderTree, HwpError> {
-        self.build_page_tree_with_header_footer_override(page_num, None)
+        self.build_page_tree_with_header_footer_override(page_num, None, None)
     }
 
+    /// `page_num` 쪽의 렌더 트리를 반환한다. `header_footer_override`는 편집 중인
+    /// 구역, 머리말 여부, 적용 범위이며, `sequence`는 순서대로 읽는 중의 조판 정보다.
+    ///
+    /// # Errors
+    /// 쪽이나 편집 대상이 범위 밖이거나 본문 쪽 번호 필드를 계산하지 못하면 오류를 반환한다.
     fn build_page_tree_with_header_footer_override(
         &self,
         page_num: u32,
         header_footer_override: Option<(usize, bool, u8)>,
+        mut sequence: Option<&mut PageLayerSequence>,
     ) -> Result<PageRenderTree, HwpError> {
         if let Some(error) = &self.body_page_field_error {
             return Err(HwpError::RenderError(error.clone()));
@@ -8504,9 +8616,6 @@ impl DocumentCore {
             .map(|s| s.section_def.outline_numbering_id)
             .unwrap_or(0);
 
-        // 번호 상태 리셋 후, 이 페이지 이전의 번호 문단을 재계산하여 카운터 복원
-        // (이전 구역 + 현재 구역의 이전 페이지 모두 포함하여 구역 간 번호 연속 지원)
-        self.layout_engine.reset_numbering_state();
         let sec_idx = page_content.section_index;
         let _tabs = self.styles.section_tab_scope(
             self.document
@@ -8523,49 +8632,35 @@ impl DocumentCore {
                 .get(sec_idx)
                 .map_or(0, |section| i32::from(section.section_def.column_spacing)),
         );
-        let sec_page_offset: usize = self
-            .pagination
-            .iter()
-            .take(sec_idx)
-            .map(|p| p.pages.len())
-            .sum();
-        let local_idx = (page_num as usize).saturating_sub(sec_page_offset);
-        {
-            let mut replayed_partial: std::collections::HashSet<(usize, usize)> =
-                std::collections::HashSet::new();
-            // 이전 구역들의 모든 페이지 replay
-            for prev_sec in 0..sec_idx {
-                if let Some(pr) = self.pagination.get(prev_sec) {
-                    let prev_paras = &self.document.sections[prev_sec].paragraphs;
-                    let prev_outline_id = self.document.sections[prev_sec]
-                        .section_def
-                        .outline_numbering_id;
-                    for pg in &pr.pages {
-                        self.replay_numbering_page(
-                            pg,
-                            prev_paras,
-                            prev_outline_id,
-                            &mut replayed_partial,
-                            prev_sec,
-                        );
-                    }
-                }
+        let numbering_state = if let Some(sequence) = sequence.as_deref_mut() {
+            // 실제 렌더링에서 진행하는 번호와 다음 쪽의 본문 번호는 별도로 관리한다.
+            let state = sequence.numbering.state.clone();
+            self.replay_numbering_page(
+                page_content,
+                paragraphs,
+                outline_num_id,
+                &mut sequence.numbering,
+            );
+            state
+        } else {
+            let mut numbering = ReplayedNumbering::default();
+            let previous_pages = self.pagination.iter().flat_map(|p| &p.pages);
+            for page in previous_pages.take(page_num as usize) {
+                let (paras, outline_id) = if page.section_index == sec_idx {
+                    (paragraphs, outline_num_id)
+                } else if let Some(section) = self.document.sections.get(page.section_index) {
+                    (
+                        &section.paragraphs[..],
+                        section.section_def.outline_numbering_id,
+                    )
+                } else {
+                    continue;
+                };
+                self.replay_numbering_page(page, paras, outline_id, &mut numbering);
             }
-            // 현재 구역의 이전 페이지들 replay
-            if let Some(pr) = self.pagination.get(sec_idx) {
-                for prev_local in 0..local_idx {
-                    if let Some(prev_page) = pr.pages.get(prev_local) {
-                        self.replay_numbering_page(
-                            prev_page,
-                            paragraphs,
-                            outline_num_id,
-                            &mut replayed_partial,
-                            sec_idx,
-                        );
-                    }
-                }
-            }
-        }
+            numbering.state
+        };
+        self.layout_engine.set_numbering_state(numbering_state);
 
         // 머리말/꼬리말이 상속된 경우 원본 구역의 문단을 조회 (source_section_index 기반)
         let header_paragraphs: &[crate::model::paragraph::Paragraph] = page_content
@@ -8673,21 +8768,40 @@ impl DocumentCore {
             (&combined_paragraphs, &combined_composed)
         };
 
-        let mut tree = self.layout_engine.build_render_tree(
-            page_content,
-            render_paragraphs,
-            header_paragraphs,
-            footer_paragraphs,
-            render_composed,
-            &self.styles,
-            footnote_shape,
-            &self.document.bin_data_content,
-            active_mp,
-            sec_measured,
-            page_border_fill,
-            outline_num_id,
-            wrap_around_paras,
-        );
+        let float_carve_evidence = sequence.map(|sequence| {
+            let body_top =
+                crate::renderer::px_to_hwpunit(page_content.layout.body_area.y, self.dpi);
+            Arc::clone(
+                sequence
+                    .float_carve_evidence
+                    .entry((sec_idx, body_top))
+                    .or_insert_with(|| {
+                        crate::renderer::float_placement::paper_or_page_float_carve_evidence(
+                            render_paragraphs,
+                            body_top,
+                        )
+                        .into()
+                    }),
+            )
+        });
+        let mut tree = self
+            .layout_engine
+            .build_render_tree_with_float_carve_evidence(
+                page_content,
+                render_paragraphs,
+                header_paragraphs,
+                footer_paragraphs,
+                render_composed,
+                &self.styles,
+                footnote_shape,
+                &self.document.bin_data_content,
+                active_mp,
+                sec_measured,
+                page_border_fill,
+                outline_num_id,
+                wrap_around_paras,
+                float_carve_evidence,
+            );
         // 확장 바탕쪽 추가 렌더링
         for ext_mp in &extra_mps {
             self.layout_engine.build_master_page_into(
@@ -8717,47 +8831,45 @@ impl DocumentCore {
         Ok(tree)
     }
 
-    /// 한 페이지의 번호 문단을 replay하여 카운터를 전진시킨다.
+    /// `page`에 있는 `paras`의 본문 번호로 `numbering`의 카운터를 전진시킨다.
+    /// 개요 번호에는 `outline_num_id`를 쓰며 여러 쪽에 걸친 문단은 한 번만 센다.
     fn replay_numbering_page(
         &self,
         page: &crate::renderer::pagination::PageContent,
         paras: &[crate::model::paragraph::Paragraph],
         outline_num_id: u16,
-        replayed: &mut std::collections::HashSet<(usize, usize)>,
-        sec_idx: usize,
+        numbering: &mut ReplayedNumbering,
     ) {
         use crate::model::style::HeadType;
         use crate::renderer::pagination::PageItem;
         for col in &page.column_contents {
             for item in &col.items {
-                let pi = match item {
+                let para_index = match item {
                     PageItem::FullParagraph { para_index }
                     | PageItem::PartialParagraph { para_index, .. }
-                    | PageItem::Table { para_index, .. } => {
-                        if replayed.insert((sec_idx, *para_index)) {
-                            Some(*para_index)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
+                    | PageItem::Table { para_index, .. } => *para_index,
+                    _ => continue,
                 };
-                if let Some(pi) = pi {
-                    if let Some(para) = paras.get(pi) {
-                        if let Some(ps) = self.styles.para_styles.get(para.para_shape_id as usize) {
-                            if ps.head_type == HeadType::Outline || ps.head_type == HeadType::Number
-                            {
-                                let nid = crate::renderer::layout::resolve_numbering_id(
-                                    ps.head_type,
-                                    ps.numbering_id,
-                                    outline_num_id,
-                                );
-                                if nid > 0 {
-                                    self.layout_engine.advance_numbering(nid, ps.para_level);
-                                }
-                            }
-                        }
-                    }
+                let Some(style) = paras
+                    .get(para_index)
+                    .and_then(|para| self.styles.para_styles.get(para.para_shape_id as usize))
+                else {
+                    continue;
+                };
+                if !matches!(style.head_type, HeadType::Outline | HeadType::Number) {
+                    continue;
+                }
+                let id = crate::renderer::layout::resolve_numbering_id(
+                    style.head_type,
+                    style.numbering_id,
+                    outline_num_id,
+                );
+                if id > 0
+                    && numbering
+                        .paragraphs
+                        .insert((page.section_index, para_index))
+                {
+                    numbering.state.advance(id, style.para_level, None);
                 }
             }
         }

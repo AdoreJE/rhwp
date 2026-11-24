@@ -37,6 +37,7 @@ pub use host_font_environment::{
     DeclaredFontFallbackRequest, ObservedFontFallback, ObservedFontSource,
 };
 mod commands;
+pub use commands::PageLayerSource;
 pub use commands::paragraph_block::{
     FillTemplateRequest, FillTemplateResult, ImportParagraphBlockLimits,
     ImportParagraphBlockPreview, ImportParagraphBlockRequest, ImportParagraphBlockResult,
